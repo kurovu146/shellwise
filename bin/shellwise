@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Resolve symlinks to find actual package location
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+if ! command -v bun &>/dev/null; then
+  echo "shellwise requires Bun runtime. Install it: https://bun.sh" >&2
+  exit 1
+fi
+
+exec bun "$SCRIPT_DIR/../src/index.ts" "$@"
