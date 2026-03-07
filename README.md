@@ -143,7 +143,18 @@ bun remove -g shellwise
 # or: npm uninstall -g shellwise
 ```
 
-Shell integration is automatically removed from your config on uninstall.
+Shell integration is automatically removed on uninstall. If you still see errors after uninstalling, manually remove these lines from your `~/.zshrc` (or `~/.bashrc`):
+
+```bash
+# shellwise shell integration
+eval "$(shellwise init zsh)"
+```
+
+To fully clean up data:
+
+```bash
+rm -rf ~/.local/share/shellwise
+```
 
 ## License
 

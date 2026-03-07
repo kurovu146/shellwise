@@ -9,21 +9,15 @@ remove_from_rc() {
   [[ ! -f "$rc_file" ]] && return
 
   if grep -qF "$MARKER" "$rc_file" 2>/dev/null; then
-    # Remove the marker line and the eval line after it
-    sed -i.shellwise-uninstall '
-      /^'"$MARKER"'$/,/^eval /d
-    ' "$rc_file" 2>/dev/null || {
-      # macOS sed requires different syntax
-      sed -i '.shellwise-uninstall' '
-        /^'"$MARKER"'$/,/^eval /d
-      ' "$rc_file"
-    }
+    # Create backup
+    cp "$rc_file" "${rc_file}.shellwise-backup"
 
-    # Remove empty trailing lines left behind
-    sed -i'' -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$rc_file" 2>/dev/null
+    # Remove marker line and the eval line after it
+    grep -vF "$MARKER" "$rc_file" | grep -v '^eval "\$(shellwise init' | grep -v '^eval "\$(sw init' > "${rc_file}.tmp"
+    mv "${rc_file}.tmp" "$rc_file"
 
     # Cleanup backup
-    rm -f "${rc_file}.shellwise-uninstall"
+    rm -f "${rc_file}.shellwise-backup"
 
     echo "[shellwise] Removed from $rc_file"
   fi
@@ -32,5 +26,9 @@ remove_from_rc() {
 remove_from_rc "$HOME/.zshrc"
 remove_from_rc "$HOME/.bashrc"
 remove_from_rc "$HOME/.bash_profile"
+
+# Stop daemon
+pid=$(head -1 "/tmp/shellwise-$(id -u).pid" 2>/dev/null) && kill "$pid" 2>/dev/null
+rm -f "/tmp/shellwise-$(id -u).pid" "/tmp/shellwise-$(id -u).sock"
 
 echo "[shellwise] Uninstalled. Restart your terminal to complete."
