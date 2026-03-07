@@ -1,0 +1,45 @@
+{
+  "name": "shellwise",
+  "version": "0.1.0",
+  "description": "Smart command history with inline auto-suggest and fuzzy search for your terminal",
+  "type": "module",
+  "bin": {
+    "sw": "./src/index.ts"
+  },
+  "files": [
+    "src/**/*.ts",
+    "scripts/*.sh"
+  ],
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --outfile dist/sw",
+    "test": "bun test",
+    "postinstall": "bash scripts/setup.sh || true",
+    "preuninstall": "bash scripts/uninstall.sh || true"
+  },
+  "keywords": [
+    "shell",
+    "history",
+    "fuzzy-search",
+    "terminal",
+    "cli",
+    "autosuggest",
+    "zsh",
+    "bash",
+    "command-history",
+    "shellwise"
+  ],
+  "author": "Vu Duc Tuan",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kurovu146/shellwise"
+  },
+  "homepage": "https://github.com/kurovu146/shellwise#readme",
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
