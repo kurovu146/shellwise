@@ -14,9 +14,9 @@ RESET='\033[0m'
 # npm adds node_modules/.bin to PATH during postinstall, so check the resolved path
 SHELLWISE_PATH="$(command -v shellwise 2>/dev/null || true)"
 if [[ -z "$SHELLWISE_PATH" ]] || [[ "$SHELLWISE_PATH" == *"/node_modules/.bin/"* ]]; then
-  echo -e "${YELLOW}${BOLD}[shellwise]${RESET} This is a CLI tool — install it globally:"
-  echo -e "  ${BOLD}bun install -g shellwise${RESET}"
-  echo -e "  ${DIM}or: npm install -g shellwise${RESET}"
+  echo -e "${YELLOW}${BOLD}[shellwise]${RESET} This is a CLI tool — install it globally:" >&2
+  echo -e "  ${BOLD}bun install -g shellwise${RESET}" >&2
+  echo -e "  ${DIM}or: npm install -g shellwise${RESET}" >&2
   exit 0
 fi
 
