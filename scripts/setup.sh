@@ -11,14 +11,12 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # Detect if this is a local (not global) install
-if [[ -z "$(command -v shellwise 2>/dev/null)" && -z "$(command -v sw 2>/dev/null)" ]]; then
-  # Check if we're inside node_modules (local install)
-  if [[ "$PWD" == *"node_modules"* ]] || [[ "${INIT_CWD:-}" == *"node_modules"* ]]; then
-    echo -e "${YELLOW}${BOLD}[shellwise]${RESET} This is a CLI tool — install it globally:"
-    echo -e "  ${BOLD}bun install -g shellwise${RESET}"
-    echo -e "  ${DIM}or: npm install -g shellwise${RESET}"
-    exit 0
-  fi
+# Only check for 'shellwise' binary (not 'sw' which may conflict with other tools)
+if [[ -z "$(command -v shellwise 2>/dev/null)" ]]; then
+  echo -e "${YELLOW}${BOLD}[shellwise]${RESET} This is a CLI tool — install it globally:"
+  echo -e "  ${BOLD}bun install -g shellwise${RESET}"
+  echo -e "  ${DIM}or: npm install -g shellwise${RESET}"
+  exit 0
 fi
 
 MARKER="# shellwise shell integration"
