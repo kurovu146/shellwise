@@ -1,3 +1,6 @@
+import { openSync, readSync, closeSync } from "fs";
+import { execSync } from "child_process";
+
 export type KeyEvent =
   | { type: "char"; char: string }
   | { type: "special"; key: SpecialKey }
@@ -53,19 +56,38 @@ export function parseKeypress(data: Buffer): KeyEvent {
   return { type: "char", char: str };
 }
 
-let originalRawMode: boolean | undefined;
+// Use /dev/tty directly — avoids Bun kqueue bug with process.stdin
+// inside $() capture from shell integration
+let ttyReadFd: number | null = null;
+
+function getTtyReadFd(): number {
+  if (ttyReadFd === null) {
+    ttyReadFd = openSync("/dev/tty", "r");
+  }
+  return ttyReadFd;
+}
+
+export function readKeypress(): Buffer {
+  const buf = Buffer.alloc(16);
+  const bytesRead = readSync(getTtyReadFd(), buf);
+  return buf.subarray(0, bytesRead);
+}
 
 export function enableRawMode(): void {
-  if (process.stdin.isTTY) {
-    originalRawMode = process.stdin.isRaw;
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-  }
+  try {
+    execSync("stty raw -echo </dev/tty", { stdio: "ignore" });
+  } catch {}
 }
 
 export function disableRawMode(): void {
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(originalRawMode ?? false);
-    process.stdin.pause();
+  try {
+    execSync("stty -raw echo </dev/tty", { stdio: "ignore" });
+  } catch {}
+}
+
+export function closeTtyInput(): void {
+  if (ttyReadFd !== null) {
+    try { closeSync(ttyReadFd); } catch {}
+    ttyReadFd = null;
   }
 }

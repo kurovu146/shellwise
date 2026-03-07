@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     switch (command) {
       case "search": {
         const flags = parseFlags(args.slice(1));
-        await runSearch(flags.query || "");
+        runSearch(flags.query || "");
         break;
       }
 

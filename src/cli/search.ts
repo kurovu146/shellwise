@@ -1,5 +1,5 @@
 import { search, type ScoredResult } from "../search";
-import { enableRawMode, disableRawMode, parseKeypress } from "../tui/input";
+import { enableRawMode, disableRawMode, parseKeypress, readKeypress, closeTtyInput } from "../tui/input";
 import {
   write,
   clearLine,
@@ -14,6 +14,7 @@ import {
 import { renderSearchBox, getSearchBoxCursorCol } from "../tui/components/search-box";
 import { renderResultList } from "../tui/components/result-list";
 import { renderStatusBar } from "../tui/components/status-bar";
+import { writeSync } from "fs";
 
 interface SearchState {
   query: string;
@@ -24,7 +25,7 @@ interface SearchState {
   renderedLines: number;
 }
 
-export async function runSearch(initialQuery: string = ""): Promise<void> {
+export function runSearch(initialQuery: string = ""): void {
   const cwd = process.env.PWD || process.cwd();
 
   const state: SearchState = {
@@ -52,6 +53,7 @@ export async function runSearch(initialQuery: string = ""): Promise<void> {
     write(showCursor());
     write(moveCursorToColumn(1));
     disableRawMode();
+    closeTtyInput();
     closeTty();
   };
 
@@ -66,14 +68,16 @@ export async function runSearch(initialQuery: string = ""): Promise<void> {
   // Render initial frame
   render(state);
 
-  // Input loop
+  // Input loop — sync reads from /dev/tty
   try {
-    for await (const chunk of readStdin()) {
+    while (true) {
+      const chunk = readKeypress();
+      if (chunk.length === 0) continue;
+
       const key = parseKeypress(chunk);
 
       if (key.type === "special" && key.key === "escape") {
         cleanup();
-        // Output nothing = cancel
         return;
       }
 
@@ -86,8 +90,8 @@ export async function runSearch(initialQuery: string = ""): Promise<void> {
         const selected = state.results[state.selectedIndex];
         cleanup();
         if (selected) {
-          // Output to stdout for shell to capture
-          process.stdout.write(selected.command);
+          // Output to stdout (fd 1) for shell to capture
+          writeSync(1, selected.command);
         }
         return;
       }
@@ -263,31 +267,4 @@ function render(state: SearchState): void {
     moveCursorToColumn(getSearchBoxCursorCol({ query: state.query, cursorPos: state.cursorPos }))
   );
   write(showCursor());
-}
-
-async function* readStdin(): AsyncGenerator<Buffer> {
-  const stdin = process.stdin;
-  stdin.resume();
-
-  const buffers: Buffer[] = [];
-  let resolve: (() => void) | null = null;
-
-  stdin.on("data", (data: Buffer) => {
-    buffers.push(data);
-    if (resolve) {
-      resolve();
-      resolve = null;
-    }
-  });
-
-  while (true) {
-    if (buffers.length === 0) {
-      await new Promise<void>((r) => {
-        resolve = r;
-      });
-    }
-    while (buffers.length > 0) {
-      yield buffers.shift()!;
-    }
-  }
 }
