@@ -31,11 +31,17 @@ Tab/Shift+Tab to navigate, Enter to select, Esc to dismiss
 
 ## Install
 
+> **Important:** This is a CLI tool — install it **globally**.
+
 ```bash
+# Recommended
 bun install -g shellwise
+
+# Or with npm
+npm install -g shellwise
 ```
 
-That's it. Shell integration is auto-injected into your `~/.zshrc` or `~/.bashrc` on install. Restart your terminal to activate.
+Shell integration is auto-injected into your `~/.zshrc` or `~/.bashrc` on install. Restart your terminal to activate.
 
 ### Manual setup
 
@@ -43,10 +49,10 @@ If auto-setup didn't work, add to your shell config:
 
 ```bash
 # ~/.zshrc
-eval "$(sw init zsh)"
+eval "$(shellwise init zsh)"
 
 # ~/.bashrc
-eval "$(sw init bash)"
+eval "$(shellwise init bash)"
 ```
 
 ## Usage
@@ -76,29 +82,31 @@ Press `Ctrl+R` to open full fuzzy search:
 
 ### Commands
 
+Both `shellwise` and `sw` work as the command name:
+
 ```bash
-sw search [--query <text>]     # Interactive fuzzy search (Ctrl+R)
-sw suggest --query <text>      # Get top suggestion (used by shell hook)
-sw add --command <cmd>         # Save a command to history
-sw init <zsh|bash>             # Output shell integration script
-sw import [zsh|bash]           # Import existing shell history
-sw stats                       # Show usage statistics
-sw prune --days <n>            # Remove entries older than n days
-sw daemon start|stop|status    # Manage background daemon
+shellwise search [--query <text>]     # Interactive fuzzy search (Ctrl+R)
+shellwise suggest --query <text>      # Get top suggestion (used by shell hook)
+shellwise add --command <cmd>         # Save a command to history
+shellwise init <zsh|bash>             # Output shell integration script
+shellwise import [zsh|bash]           # Import existing shell history
+shellwise stats                       # Show usage statistics
+shellwise prune --days <n>            # Remove entries older than n days
+shellwise daemon start|stop|status    # Manage background daemon
 ```
 
 ### Import existing history
 
 ```bash
-sw import zsh    # Import from ~/.zsh_history
-sw import bash   # Import from ~/.bash_history
+shellwise import zsh    # Import from ~/.zsh_history
+shellwise import bash   # Import from ~/.bash_history
 ```
 
 ## Architecture
 
 ```
 ┌──────────────┐     TCP (persistent)     ┌──────────────────┐
-│   Zsh/Bash   │◄────────────────────────►│   sw daemon      │
+│   Zsh/Bash   │◄────────────────────────►│ shellwise daemon │
 │   (shell)    │     ~1-3ms round-trip    │   (Bun process)  │
 └──────────────┘                          └────────┬─────────┘
                                                    │
@@ -132,6 +140,7 @@ sw import bash   # Import from ~/.bash_history
 
 ```bash
 bun remove -g shellwise
+# or: npm uninstall -g shellwise
 ```
 
 Shell integration is automatically removed from your config on uninstall.

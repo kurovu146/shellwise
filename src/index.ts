@@ -29,7 +29,7 @@ function parseFlags(args: string[]): Record<string, string> {
 function printHelp(): void {
   console.log(`shellwise - Smart command history with fuzzy search
 
-Usage: sw <command> [options]
+Usage: shellwise <command> [options]  (or: sw <command>)
 
 Commands:
   search [--query <text>]     Interactive fuzzy search (Ctrl+R)
@@ -42,8 +42,8 @@ Commands:
   daemon start|stop|status    Manage background daemon (faster suggest)
 
 Setup:
-  Add to ~/.zshrc:   eval "$(sw init zsh)"
-  Add to ~/.bashrc:  eval "$(sw init bash)"
+  Add to ~/.zshrc:   eval "$(shellwise init zsh)"
+  Add to ~/.bashrc:  eval "$(shellwise init bash)"
 
 Features:
   - Auto-save: commands are recorded automatically
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
       case "add": {
         const flags = parseFlags(args.slice(1));
         if (!flags.command) {
-          console.error("Usage: sw add --command <cmd>");
+          console.error("Usage: shellwise add --command <cmd>");
           process.exit(1);
         }
 
@@ -106,10 +106,10 @@ async function main(): Promise<void> {
       case "init": {
         const shell = args[1];
         if (!shell) {
-          console.error("Usage: sw init <zsh|bash>");
+          console.error("Usage: shellwise init <zsh|bash>");
           process.exit(1);
         }
-        runInit(shell, "sw");
+        runInit(shell, "shellwise");
         break;
       }
 
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
               return;
             }
             // Fork to background
-            const proc = Bun.spawn(["sw", "daemon", "_run"], {
+            const proc = Bun.spawn(["shellwise", "daemon", "_run"], {
               stdio: ["ignore", "ignore", "ignore"],
               // @ts-ignore - Bun supports detached
               detached: true,
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
             break;
           }
           default:
-            console.error("Usage: sw daemon start|stop|status");
+            console.error("Usage: shellwise daemon start|stop|status");
             process.exit(1);
         }
         break;

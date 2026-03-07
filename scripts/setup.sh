@@ -10,15 +10,33 @@ DIM='\033[2m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
+# Detect if this is a local (not global) install
+if [[ -z "$(command -v shellwise 2>/dev/null)" && -z "$(command -v sw 2>/dev/null)" ]]; then
+  # Check if we're inside node_modules (local install)
+  if [[ "$PWD" == *"node_modules"* ]] || [[ "${INIT_CWD:-}" == *"node_modules"* ]]; then
+    echo -e "${YELLOW}${BOLD}[shellwise]${RESET} This is a CLI tool — install it globally:"
+    echo -e "  ${BOLD}bun install -g shellwise${RESET}"
+    echo -e "  ${DIM}or: npm install -g shellwise${RESET}"
+    exit 0
+  fi
+fi
+
 MARKER="# shellwise shell integration"
 
-# Detect sw binary path
+# Detect shellwise binary path (prefer 'shellwise' over 'sw' to avoid conflicts)
 SW_BIN=""
-if command -v sw &>/dev/null; then
-  SW_BIN="sw"
-else
-  # Try common global bin paths
-  for p in "$HOME/.bun/bin/sw" "$HOME/.local/bin/sw" "$(npm prefix -g 2>/dev/null)/bin/sw"; do
+if command -v shellwise &>/dev/null; then
+  SW_BIN="shellwise"
+elif command -v sw &>/dev/null; then
+  # Verify it's actually shellwise, not another tool
+  if sw --help 2>&1 | grep -q "shellwise" 2>/dev/null; then
+    SW_BIN="sw"
+  fi
+fi
+
+# Try common global bin paths
+if [[ -z "$SW_BIN" ]]; then
+  for p in "$HOME/.bun/bin/shellwise" "$HOME/.local/bin/shellwise" "$(npm prefix -g 2>/dev/null)/bin/shellwise"; do
     if [[ -x "$p" ]]; then
       SW_BIN="$p"
       break
@@ -27,8 +45,8 @@ else
 fi
 
 if [[ -z "$SW_BIN" ]]; then
-  echo -e "${YELLOW}[shellwise]${RESET} Could not find sw binary. Add manually:"
-  echo '  eval "$(sw init zsh)"   # add to ~/.zshrc'
+  echo -e "${YELLOW}[shellwise]${RESET} Could not find shellwise binary. Add manually:"
+  echo '  eval "$(shellwise init zsh)"   # add to ~/.zshrc'
   exit 0
 fi
 
@@ -75,14 +93,16 @@ case "$SHELL_NAME" in
   *)
     echo -e "${YELLOW}[shellwise]${RESET} Unsupported shell: $SHELL_NAME"
     echo '  Supported: zsh, bash'
-    echo '  Add manually: eval "$(sw init zsh)"'
+    echo '  Add manually: eval "$(shellwise init zsh)"'
     exit 0
     ;;
 esac
 
 # Start daemon for fast suggest
-if command -v sw &>/dev/null; then
-  sw daemon start &>/dev/null || true
+if command -v shellwise &>/dev/null; then
+  shellwise daemon start &>/dev/null || true
+elif [[ -n "$SW_BIN" ]]; then
+  $SW_BIN daemon start &>/dev/null || true
 fi
 
 echo -e "${GREEN}${BOLD}[shellwise]${RESET} Restart your terminal or run: ${BOLD}source ~/.${SHELL_NAME}rc${RESET}"
