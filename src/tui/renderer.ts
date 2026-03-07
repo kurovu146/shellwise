@@ -1,4 +1,5 @@
 import { openSync, writeSync, closeSync } from "fs";
+import { execSync } from "child_process";
 
 const ESC = "\x1b[";
 
@@ -49,10 +50,14 @@ export function showCursor(): string {
 }
 
 export function getTerminalSize(): { rows: number; cols: number } {
-  // process.stdout may not be a TTY when running inside $() capture
-  const rows = process.stdout?.rows || process.stderr?.rows || 24;
-  const cols = process.stdout?.columns || process.stderr?.columns || 80;
-  return { rows, cols };
+  // Avoid process.stdout/stderr entirely — Bun crashes with kqueue error
+  // when they're accessed inside $() capture. Use stty instead.
+  try {
+    const output = execSync("stty size </dev/tty", { encoding: "utf-8" }).trim();
+    const [rows, cols] = output.split(" ").map(Number);
+    if (rows > 0 && cols > 0) return { rows, cols };
+  } catch {}
+  return { rows: 24, cols: 80 };
 }
 
 export function write(text: string): void {
