@@ -1,6 +1,6 @@
 {
   "name": "shellwise",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Smart command history with inline auto-suggest and fuzzy search for your terminal",
   "type": "module",
   "bin": {
