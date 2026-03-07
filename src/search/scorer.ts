@@ -37,13 +37,12 @@ export function rankResults(
   }
 
   const results: ScoredResult[] = [];
+  const maxFrecency = stats.reduce((max, s) => Math.max(max, s.frecency_score), 1);
 
   for (const match of matches) {
     const stat = statsMap.get(match.text);
     if (!stat) continue;
 
-    // Normalize frecency to 0-1 range
-    const maxFrecency = stats.reduce((max, s) => Math.max(max, s.frecency_score), 1);
     const normalizedFrecency = stat.frecency_score / maxFrecency;
 
     // CWD bonus

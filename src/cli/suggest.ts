@@ -10,15 +10,18 @@ export function runSuggest(query: string, limit: number = 5): void {
   const db = getDb();
   const historyResults: string[] = [];
 
+  // Escape LIKE wildcards in user input
+  const escapedQuery = query.replace(/[%_\\]/g, "\\$&");
+
   // History: prefix matches
   const prefixes = db
     .query<{ command: string }, [string, number]>(
       `SELECT command FROM command_stats
-       WHERE command LIKE ? || '%'
+       WHERE command LIKE ? || '%' ESCAPE '\\'
        ORDER BY frecency_score DESC
        LIMIT ?`
     )
-    .all(query, limit);
+    .all(escapedQuery, limit);
 
   for (const r of prefixes) {
     if (r.command !== query) historyResults.push(r.command);
@@ -32,11 +35,11 @@ export function runSuggest(query: string, limit: number = 5): void {
     const contains = db
       .query<{ command: string }, [string, string, number]>(
         `SELECT command FROM command_stats
-         WHERE command LIKE '%' || ? || '%' AND command != ?
+         WHERE command LIKE '%' || ? || '%' ESCAPE '\\' AND command != ?
          ORDER BY frecency_score DESC
          LIMIT ?`
       )
-      .all(query, query, remaining + historyResults.length);
+      .all(escapedQuery, query, remaining + historyResults.length);
 
     for (const r of contains) {
       if (!resultSet.has(r.command) && r.command !== query) {

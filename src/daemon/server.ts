@@ -2,15 +2,15 @@ import { getDb, closeDb } from "../db/connection";
 import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
+import { IGNORED_COMMANDS } from "../utils/constants";
 import { parseRequest, getSocketPath, getPidPath, getDaemonPort } from "./protocol";
 import { unlinkSync, writeFileSync, existsSync } from "fs";
 import type { Socket } from "bun";
-
-const IGNORED_COMMANDS = new Set(["ls", "cd", "pwd", "exit", "clear", "sw"]);
 const IDLE_TIMEOUT = 30 * 60_000; // 30 min
 
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let server: ReturnType<typeof Bun.listen> | null = null;
+let tcpServer: ReturnType<typeof Bun.listen> | null = null;
 
 // Pre-warm DB + prepared statements on start
 let suggestPrefix: ReturnType<ReturnType<typeof getDb>["prepare"]>;
@@ -20,13 +20,13 @@ function initPreparedStatements() {
   const db = getDb();
   suggestPrefix = db.prepare(
     `SELECT command FROM command_stats
-     WHERE command LIKE ?1 || '%'
+     WHERE command LIKE ?1 || '%' ESCAPE '\\'
      ORDER BY frecency_score DESC
      LIMIT ?2`
   );
   suggestContains = db.prepare(
     `SELECT command FROM command_stats
-     WHERE command LIKE '%' || ?1 || '%' AND command != ?1
+     WHERE command LIKE '%' || ?1 || '%' ESCAPE '\\' AND command != ?1
      ORDER BY frecency_score DESC
      LIMIT ?2`
   );
@@ -55,8 +55,11 @@ function handleRequest(raw: string): string {
       const historyResults: string[] = [];
       const historyLimit = 5;
 
+      // Escape LIKE wildcards in user input
+      const escapedQuery = req.query.replace(/[%_\\]/g, "\\$&");
+
       // History: prefix matches
-      const prefixes = suggestPrefix.all(req.query, historyLimit) as { command: string }[];
+      const prefixes = suggestPrefix.all(escapedQuery, historyLimit) as { command: string }[];
       for (const r of prefixes) {
         if (r.command !== req.query) historyResults.push(r.command);
       }
@@ -65,7 +68,7 @@ function handleRequest(raw: string): string {
       if (historyResults.length < historyLimit) {
         const remaining = historyLimit - historyResults.length;
         const resultSet = new Set(historyResults);
-        const contains = suggestContains.all(req.query, remaining + historyResults.length) as {
+        const contains = suggestContains.all(escapedQuery, remaining + historyResults.length) as {
           command: string;
         }[];
         for (const r of contains) {
@@ -151,7 +154,7 @@ export function startServer(): void {
   });
 
   const port = getDaemonPort();
-  Bun.listen({
+  tcpServer = Bun.listen({
     hostname: "127.0.0.1",
     port,
     socket: socketHandlers,
@@ -176,6 +179,10 @@ export function stopServer(): void {
   if (server) {
     server.stop(true);
     server = null;
+  }
+  if (tcpServer) {
+    tcpServer.stop(true);
+    tcpServer = null;
   }
   closeDb();
 

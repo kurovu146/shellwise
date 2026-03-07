@@ -1,5 +1,6 @@
 import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
+import { IGNORED_COMMANDS } from "../utils/constants";
 
 interface AddOptions {
   command: string;
@@ -9,8 +10,6 @@ interface AddOptions {
   session?: string;
   shell?: string;
 }
-
-const IGNORED_COMMANDS = new Set(["ls", "cd", "pwd", "exit", "clear", "sw"]);
 
 export function runAdd(opts: AddOptions): void {
   const cmd = opts.command.trim();

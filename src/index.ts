@@ -10,7 +10,6 @@ import { runPrune } from "./cli/prune";
 import { closeDb } from "./db/connection";
 import { startServer, isDaemonRunning, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
-import { getSocketPath, getPidPath, getDaemonPort } from "./daemon/protocol";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -86,7 +85,9 @@ async function main(): Promise<void> {
         }
 
         // Try daemon first
-        const addMsg = `ADD\t${flags.command}\t${flags.cwd || ""}\t${flags["exit-code"] || "0"}\t${flags.duration || "0"}\t${flags.session || ""}\t${flags.shell || ""}\n`;
+        // Strip tabs from command to avoid breaking protocol delimiter
+        const safeCommand = flags.command.replace(/\t/g, " ");
+        const addMsg = `ADD\t${safeCommand}\t${flags.cwd || ""}\t${flags["exit-code"] || "0"}\t${flags.duration || "0"}\t${flags.session || ""}\t${flags.shell || ""}\n`;
         const addResult = await daemonRequest(addMsg);
         if (!addResult) {
           // Fallback: direct

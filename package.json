@@ -1,12 +1,13 @@
 {
   "name": "shellwise",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Smart command history with inline auto-suggest and fuzzy search for your terminal",
   "type": "module",
   "bin": {
-    "sw": "./src/index.ts"
+    "sw": "./bin/sw.js"
   },
   "files": [
+    "bin/sw.js",
     "src/**/*.ts",
     "scripts/*.sh"
   ],

@@ -95,8 +95,10 @@ export function searchCommands(opts: SearchOptions): CommandStats[] {
   const params: (string | number)[] = [];
 
   if (opts.query) {
-    conditions.push("cs.command LIKE ?");
-    params.push(`%${opts.query}%`);
+    conditions.push("cs.command LIKE ? ESCAPE '\\'");
+    // Escape LIKE wildcards in user input
+    const escaped = opts.query.replace(/[%_\\]/g, "\\$&");
+    params.push(`%${escaped}%`);
   }
 
   if (opts.cwd) {
