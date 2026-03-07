@@ -9,6 +9,7 @@ import {
   showCursor,
   getTerminalSize,
   clearDown,
+  closeTty,
 } from "../tui/renderer";
 import { renderSearchBox, getSearchBoxCursorCol } from "../tui/components/search-box";
 import { renderResultList } from "../tui/components/result-list";
@@ -51,6 +52,7 @@ export async function runSearch(initialQuery: string = ""): Promise<void> {
     write(showCursor());
     write(moveCursorToColumn(1));
     disableRawMode();
+    closeTty();
   };
 
   // Handle unexpected exit
