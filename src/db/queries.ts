@@ -151,7 +151,12 @@ export function pruneOlderThan(days: number): number {
   const db = getDb();
   const cutoff = Date.now() - days * 24 * 3600_000;
 
-  const result = db.run("DELETE FROM commands WHERE created_at < ?", [cutoff]);
+  const result = db.run(
+    `DELETE FROM commands WHERE command_hash IN (
+       SELECT command_hash FROM command_stats WHERE last_used_at < ?
+     )`,
+    [cutoff]
+  );
 
   // Cleanup orphaned stats
   db.run(
