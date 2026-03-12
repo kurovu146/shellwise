@@ -21,13 +21,13 @@ function initPreparedStatements() {
   suggestPrefix = db.prepare(
     `SELECT command FROM command_stats
      WHERE command LIKE ?1 || '%' ESCAPE '\\'
-     ORDER BY frecency_score DESC
+     ORDER BY last_used_at DESC
      LIMIT ?2`
   );
   suggestContains = db.prepare(
     `SELECT command FROM command_stats
      WHERE command LIKE '%' || ?1 || '%' ESCAPE '\\' AND command != ?1
-     ORDER BY frecency_score DESC
+     ORDER BY last_used_at DESC
      LIMIT ?2`
   );
 }
