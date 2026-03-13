@@ -25,7 +25,7 @@ interface SearchState {
   renderedLines: number;
 }
 
-export function runSearch(initialQuery: string = ""): void {
+export function pickCommand(initialQuery: string = ""): string | null {
   const cwd = process.env.PWD || process.cwd();
 
   const state: SearchState = {
@@ -78,22 +78,18 @@ export function runSearch(initialQuery: string = ""): void {
 
       if (key.type === "special" && key.key === "escape") {
         cleanup();
-        return;
+        return null;
       }
 
       if (key.type === "ctrl" && key.char === "c") {
         cleanup();
-        return;
+        return null;
       }
 
       if (key.type === "special" && key.key === "enter") {
         const selected = state.results[state.selectedIndex];
         cleanup();
-        if (selected) {
-          // Output to stdout (fd 1) for shell to capture
-          writeSync(1, selected.command);
-        }
-        return;
+        return selected?.command ?? null;
       }
 
       let needsSearch = false;
@@ -194,6 +190,13 @@ export function runSearch(initialQuery: string = ""): void {
     }
   } finally {
     cleanup();
+  }
+}
+
+export function runSearch(initialQuery: string = ""): void {
+  const selected = pickCommand(initialQuery);
+  if (selected) {
+    writeSync(1, selected);
   }
 }
 

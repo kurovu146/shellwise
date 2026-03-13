@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 
 import { runAdd } from "./cli/add";
-import { runSearch } from "./cli/search";
+import { runSearch, pickCommand } from "./cli/search";
 import { runSuggest } from "./cli/suggest";
 import { runInit } from "./cli/init";
 import { runImport } from "./cli/import";
 import { runStats } from "./cli/stats";
 import { runPrune } from "./cli/prune";
+import { deleteCommand } from "./db/queries";
 import { closeDb } from "./db/connection";
 import { startServer, isDaemonRunning, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
@@ -34,12 +35,14 @@ Usage: shellwise <command> [options]  (or: sw <command>)
 Commands:
   search [--query <text>]     Interactive fuzzy search (Ctrl+R)
   suggest --query <text>      Get top suggestion (used by shell hook)
-  add --command <cmd>         Save a command to history
+  add <cmd>                   Save a command to history
+  delete <cmd>                Delete a command from history
   init <zsh|bash>             Output shell integration script
   import [zsh|bash]           Import existing shell history
   stats                       Show usage statistics
   prune --days <n>            Remove entries older than n days
   daemon start|stop|status    Manage background daemon (faster suggest)
+  version                     Show current version
 
 Setup:
   Add to ~/.zshrc:   eval "$(shellwise init zsh)"
@@ -79,20 +82,21 @@ async function main(): Promise<void> {
 
       case "add": {
         const flags = parseFlags(args.slice(1));
-        if (!flags.command) {
-          console.error("Usage: shellwise add --command <cmd>");
+        const addCmd = flags.command || args.slice(1).filter(a => !a.startsWith("--")).join(" ");
+        if (!addCmd) {
+          console.error("Usage: shellwise add <cmd>");
           process.exit(1);
         }
 
         // Try daemon first
         // Strip tabs from command to avoid breaking protocol delimiter
-        const safeCommand = flags.command.replace(/\t/g, " ");
+        const safeCommand = addCmd.replace(/\t/g, " ");
         const addMsg = `ADD\t${safeCommand}\t${flags.cwd || ""}\t${flags["exit-code"] || "0"}\t${flags.duration || "0"}\t${flags.session || ""}\t${flags.shell || ""}\n`;
         const addResult = await daemonRequest(addMsg);
         if (!addResult) {
           // Fallback: direct
           runAdd({
-            command: flags.command,
+            command: addCmd,
             cwd: flags.cwd,
             exitCode: flags["exit-code"] ? parseInt(flags["exit-code"]) : undefined,
             duration: flags.duration ? parseInt(flags.duration) : undefined,
@@ -182,6 +186,28 @@ async function main(): Promise<void> {
             console.error("Usage: shellwise daemon start|stop|status");
             process.exit(1);
         }
+        break;
+      }
+
+      case "delete": {
+        const delQuery = args.slice(1).join(" ");
+        const delCmd = pickCommand(delQuery);
+        if (delCmd) {
+          const deleted = deleteCommand(delCmd);
+          if (deleted) {
+            console.log(`Deleted: ${delCmd}`);
+          } else {
+            console.log("Command not found in history.");
+          }
+        }
+        break;
+      }
+
+      case "version":
+      case "--version":
+      case "-v": {
+        const pkg = require("../package.json");
+        console.log(pkg.version);
         break;
       }
 

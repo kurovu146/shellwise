@@ -103,12 +103,14 @@ Both `shellwise` and `sw` work as the command name:
 ```bash
 shellwise search [--query <text>]     # Interactive fuzzy search (Ctrl+R)
 shellwise suggest --query <text>      # Get top suggestion (used by shell hook)
-shellwise add --command <cmd>         # Save a command to history
+shellwise add <cmd>                   # Save a command to history
+shellwise delete [query]              # Interactive search & delete a command
 shellwise init <zsh|bash>             # Output shell integration script
 shellwise import [zsh|bash]           # Import existing shell history
 shellwise stats                       # Show usage statistics
 shellwise prune --days <n>            # Remove entries older than n days
 shellwise daemon start|stop|status    # Manage background daemon
+shellwise version                     # Show current version
 ```
 
 ### Import existing history
