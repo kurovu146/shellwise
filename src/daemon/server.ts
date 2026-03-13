@@ -2,7 +2,6 @@ import { getDb, closeDb } from "../db/connection";
 import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
-import { IGNORED_COMMANDS } from "../utils/constants";
 import { parseRequest, getSocketPath, getPidPath, getDaemonPort } from "./protocol";
 import { unlinkSync, writeFileSync, existsSync } from "fs";
 import type { Socket } from "bun";
@@ -95,9 +94,6 @@ function handleRequest(raw: string): string {
       const cmd = req.command.trim();
       if (!cmd || cmd.length < 2 || cmd.startsWith(" ")) return "OK\n\n";
       if (req.exitCode !== 0) return "OK\n\n"; // Only save successful commands
-      const baseCmd = cmd.split(/\s+/)[0];
-      if (IGNORED_COMMANDS.has(baseCmd)) return "OK\n\n";
-
       insertCommand({
         command: cmd,
         cwd: req.cwd || undefined,
