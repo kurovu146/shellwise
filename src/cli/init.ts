@@ -97,6 +97,14 @@ __sw_precmd() {
         --session "\$SW_SESSION_ID" \\
         --shell "zsh" &!
 
+    # Show update notice if available
+    local __sw_line
+    for __sw_line in "\${__sw_tcp_result[@]}"; do
+      if [[ "\$__sw_line" == UPDATE$'\\t'* ]]; then
+        print -P "%F{yellow}\${__sw_line#UPDATE	}%f"
+      fi
+    done
+
     unset __SW_COMMAND __SW_START_TIME
   fi
 }

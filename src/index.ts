@@ -9,6 +9,7 @@ import { runStats } from "./cli/stats";
 import { runPrune } from "./cli/prune";
 import { deleteCommand } from "./db/queries";
 import { closeDb } from "./db/connection";
+import { checkForUpdate } from "./utils/update-check";
 import { startServer, isDaemonRunning, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
 
@@ -225,6 +226,13 @@ async function main(): Promise<void> {
     }
   } finally {
     if (command !== "daemon") closeDb();
+
+    // Check for updates on interactive commands (cached, max once per day)
+    const silentCommands = new Set(["suggest", "add", "search", "init", "daemon", "_run"]);
+    if (command && !silentCommands.has(command)) {
+      const pkg = require("../package.json");
+      await checkForUpdate(pkg.version);
+    }
   }
 }
 

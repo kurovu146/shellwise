@@ -2,6 +2,7 @@ import { getDb, closeDb } from "../db/connection";
 import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
+import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
 import { parseRequest, getSocketPath, getPidPath, getDaemonPort } from "./protocol";
 import { unlinkSync, writeFileSync, existsSync } from "fs";
 import type { Socket } from "bun";
@@ -10,6 +11,7 @@ const IDLE_TIMEOUT = 30 * 60_000; // 30 min
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let server: ReturnType<typeof Bun.listen> | null = null;
 let tcpServer: ReturnType<typeof Bun.listen> | null = null;
+let updateNotified = false;
 
 // Pre-warm DB + prepared statements on start
 let suggestPrefix: ReturnType<ReturnType<typeof getDb>["prepare"]>;
@@ -109,6 +111,22 @@ function handleRequest(raw: string): string {
         session_id: req.session || undefined,
         shell: req.shell || undefined,
       });
+
+      // Check update notice from cache (sync, fast, once per daemon session)
+      const pkg = require("../../package.json");
+      if (!updateNotified) {
+        const notice = getUpdateNotice(pkg.version);
+        if (notice) {
+          updateNotified = true;
+          // Refresh cache in background
+          checkForUpdate(pkg.version, true).catch(() => {});
+          return `OK\nUPDATE\t${notice}\n\n`;
+        }
+      }
+
+      // Refresh cache in background for next time
+      checkForUpdate(pkg.version, true).catch(() => {});
+
       return "OK\n\n";
     }
 

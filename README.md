@@ -60,14 +60,11 @@ eval "$(shellwise init bash)"
 
 ## Update
 
+`shellwise version` and `shellwise stats` will notify you when a new version is available.
+
 ```bash
-# Homebrew
 brew upgrade shellwise
-
-# Bun
 bun install -g shellwise@latest
-
-# npm
 npm install -g shellwise@latest
 ```
 
@@ -110,7 +107,7 @@ shellwise import [zsh|bash]           # Import existing shell history
 shellwise stats                       # Show usage statistics
 shellwise prune --days <n>            # Remove entries older than n days
 shellwise daemon start|stop|status    # Manage background daemon
-shellwise version                     # Show current version
+shellwise version                    # Show current version
 ```
 
 ### Delete a command
