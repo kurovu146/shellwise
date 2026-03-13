@@ -55,5 +55,5 @@ export function search(input: SearchInput): ScoredResult[] {
     cwdCommands = new Set(rows.map((r) => r.command_hash));
   }
 
-  return rankResults(matches, dbResults, input.cwd, cwdCommands).slice(0, limit);
+  return rankResults(matches, dbResults, input.query, input.cwd, cwdCommands).slice(0, limit);
 }

@@ -57,10 +57,14 @@ function handleRequest(raw: string): string {
       // Escape LIKE wildcards in user input
       const escapedQuery = req.query.replace(/[%_\\]/g, "\\$&");
 
-      // History: prefix matches
+      // History: prefix matches (exact match first)
       const prefixes = suggestPrefix.all(escapedQuery, historyLimit) as { command: string }[];
       for (const r of prefixes) {
-        if (r.command !== req.query) historyResults.push(r.command);
+        if (r.command === req.query) {
+          historyResults.unshift(r.command);
+        } else {
+          historyResults.push(r.command);
+        }
       }
 
       // History: contains matches (fill remaining)
@@ -71,7 +75,7 @@ function handleRequest(raw: string): string {
           command: string;
         }[];
         for (const r of contains) {
-          if (!resultSet.has(r.command) && r.command !== req.query) {
+          if (!resultSet.has(r.command)) {
             historyResults.push(r.command);
             if (historyResults.length >= historyLimit) break;
           }
@@ -81,7 +85,7 @@ function handleRequest(raw: string): string {
       // Common commands: fill with suggestions not already in history
       const seen = new Set(historyResults);
       const commonResults = getCommonSuggestions(req.query, 10)
-        .filter((cmd) => !seen.has(cmd) && cmd !== req.query)
+        .filter((cmd) => !seen.has(cmd))
         .slice(0, 5);
 
       // Merge: history first, then common
@@ -93,7 +97,9 @@ function handleRequest(raw: string): string {
     case "ADD": {
       const cmd = req.command.trim();
       if (!cmd || cmd.length < 2 || cmd.startsWith(" ")) return "OK\n\n";
-      if (req.exitCode !== 0) return "OK\n\n"; // Only save successful commands
+      if (req.exitCode !== 0) return "OK\n\n";
+      const baseCmd = cmd.split(/\s+/)[0];
+      if (baseCmd === "shellwise" || baseCmd === "sw") return "OK\n\n";
       insertCommand({
         command: cmd,
         cwd: req.cwd || undefined,

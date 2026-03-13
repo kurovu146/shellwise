@@ -27,6 +27,7 @@ const DEFAULT_WEIGHTS: ScoreWeights = {
 export function rankResults(
   matches: FuzzyMatch[],
   stats: CommandStats[],
+  query: string,
   currentCwd?: string,
   cwdCommands?: Set<string>,
   weights: ScoreWeights = DEFAULT_WEIGHTS
@@ -65,6 +66,11 @@ export function rankResults(
     });
   }
 
-  results.sort((a, b) => b.finalScore - a.finalScore);
+  results.sort((a, b) => {
+    const aExact = a.command.toLowerCase() === query ? 1 : 0;
+    const bExact = b.command.toLowerCase() === query ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    return b.finalScore - a.finalScore;
+  });
   return results;
 }

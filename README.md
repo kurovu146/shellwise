@@ -113,6 +113,19 @@ shellwise daemon start|stop|status    # Manage background daemon
 shellwise version                     # Show current version
 ```
 
+### Delete a command
+
+Opens an interactive picker to search and delete a command from history:
+
+```bash
+shellwise delete          # Browse all commands, pick one to delete
+shellwise delete git      # Pre-filter with "git", pick one to delete
+```
+
+1. Run the command and press `Enter` to open the picker
+2. Type to filter results
+3. `Tab` / `↑↓` to navigate, `Enter` to confirm deletion, `Esc` to cancel
+
 ### Import existing history
 
 ```bash

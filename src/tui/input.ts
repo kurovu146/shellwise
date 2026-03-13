@@ -23,13 +23,17 @@ export type SpecialKey =
 export function parseKeypress(data: Buffer): KeyEvent {
   const str = data.toString("utf-8");
 
+  // Backspace (127 = DEL, 8 = BS)
+  if (data.length === 1 && (data[0] === 127 || data[0] === 8)) {
+    return { type: "special", key: "backspace" };
+  }
+
   // Ctrl combinations
   if (data.length === 1 && data[0] < 32) {
     const char = data[0];
     if (char === 13) return { type: "special", key: "enter" };
     if (char === 9) return { type: "special", key: "tab" };
     if (char === 27) return { type: "special", key: "escape" };
-    if (char === 127) return { type: "special", key: "backspace" };
     // Ctrl+A = 1, Ctrl+B = 2, etc.
     return { type: "ctrl", char: String.fromCharCode(char + 96) };
   }
