@@ -34,10 +34,13 @@ Tab/Shift+Tab to navigate, Enter to select, Esc to dismiss
 > **Important:** This is a CLI tool — install it **globally**.
 
 ```bash
-# Recommended
+# Homebrew
+brew install kurovu146/tap/shellwise
+
+# Bun
 bun install -g shellwise
 
-# Or with npm
+# npm
 npm install -g shellwise
 ```
 
@@ -53,6 +56,19 @@ eval "$(shellwise init zsh)"
 
 # ~/.bashrc
 eval "$(shellwise init bash)"
+```
+
+## Update
+
+```bash
+# Homebrew
+brew upgrade shellwise
+
+# Bun
+bun install -g shellwise@latest
+
+# npm
+npm install -g shellwise@latest
 ```
 
 ## Usage
@@ -139,8 +155,14 @@ shellwise import bash   # Import from ~/.bash_history
 ## Uninstall
 
 ```bash
+# Homebrew
+brew uninstall shellwise
+
+# Bun
 bun remove -g shellwise
-# or: npm uninstall -g shellwise
+
+# npm
+npm uninstall -g shellwise
 ```
 
 Shell integration is automatically removed on uninstall. If you still see errors after uninstalling, manually remove these lines from your `~/.zshrc` (or `~/.bashrc`):
