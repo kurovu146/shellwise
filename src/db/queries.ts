@@ -166,6 +166,16 @@ export function pruneOlderThan(days: number): number {
   return result.changes;
 }
 
+export function getExistingHashes(): Set<string> {
+  const db = getDb();
+  const rows = db
+    .query<{ command_hash: string }, []>(
+      "SELECT command_hash FROM command_stats"
+    )
+    .all();
+  return new Set(rows.map((r) => r.command_hash));
+}
+
 export function refreshAllFrecency(): void {
   const db = getDb();
   const now = Date.now();
