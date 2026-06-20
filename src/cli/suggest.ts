@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { FRECENCY_EXPR } from "../db/frecency";
 import { getCommonSuggestions } from "../data/common-commands";
 
 /**
@@ -18,7 +19,7 @@ export function runSuggest(query: string, limit: number = 5): void {
     .query<{ command: string }, [string, number]>(
       `SELECT command FROM command_stats
        WHERE command LIKE ? || '%' ESCAPE '\\'
-       ORDER BY frecency_score DESC
+       ORDER BY ${FRECENCY_EXPR} DESC
        LIMIT ?`
     )
     .all(escapedQuery, limit);
@@ -36,7 +37,7 @@ export function runSuggest(query: string, limit: number = 5): void {
       .query<{ command: string }, [string, string, number]>(
         `SELECT command FROM command_stats
          WHERE command LIKE '%' || ? || '%' ESCAPE '\\' AND command != ?
-         ORDER BY frecency_score DESC
+         ORDER BY ${FRECENCY_EXPR} DESC
          LIMIT ?`
       )
       .all(escapedQuery, query, remaining + historyResults.length);

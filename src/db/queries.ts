@@ -1,4 +1,5 @@
 import { getDb } from "./connection";
+import { FRECENCY_EXPR } from "./frecency";
 import { createHash } from "crypto";
 
 export interface CommandRecord {
@@ -58,28 +59,19 @@ export function insertCommand(input: InsertCommandInput): void {
       ]
     );
 
-    // Upsert command_stats
+    // Upsert command_stats. frecency_score is no longer used for ranking
+    // (recency is computed at query time via FRECENCY_EXPR); we keep the
+    // column populated with the raw frequency for debugging/back-compat.
     db.run(
       `INSERT INTO command_stats (command_hash, command, frequency, last_used_at, frecency_score)
-       VALUES (?, ?, 1, ?, 4.0)
+       VALUES (?, ?, 1, ?, 1)
        ON CONFLICT(command_hash) DO UPDATE SET
          frequency = frequency + 1,
          last_used_at = ?,
-         frecency_score = (frequency + 1) * ?`,
-      [hash, input.command.trim(), now, now, calculateRecencyWeight(now)]
+         frecency_score = frequency + 1`,
+      [hash, input.command.trim(), now, now]
     );
   })();
-}
-
-function calculateRecencyWeight(lastUsedAt: number): number {
-  const age = Date.now() - lastUsedAt;
-  const hour = 3600_000;
-  if (age < hour) return 4.0;
-  if (age < 24 * hour) return 2.0;
-  if (age < 7 * 24 * hour) return 1.5;
-  if (age < 30 * 24 * hour) return 1.0;
-  if (age < 90 * 24 * hour) return 0.5;
-  return 0.25;
 }
 
 export interface SearchOptions {
@@ -120,7 +112,7 @@ export function searchCommands(opts: SearchOptions): CommandStats[] {
 
   const rows = db
     .query<CommandStats, (string | number)[]>(
-      `SELECT command_hash, command, frequency, last_used_at, frecency_score
+      `SELECT command_hash, command, frequency, last_used_at, ${FRECENCY_EXPR} AS frecency_score
        FROM command_stats cs
        ${where}
        ORDER BY frecency_score DESC
@@ -184,25 +176,4 @@ export function getExistingHashes(): Set<string> {
     )
     .all();
   return new Set(rows.map((r) => r.command_hash));
-}
-
-export function refreshAllFrecency(): void {
-  const db = getDb();
-  const now = Date.now();
-  const stats = db
-    .query<{ command_hash: string; frequency: number; last_used_at: number }, []>(
-      "SELECT command_hash, frequency, last_used_at FROM command_stats"
-    )
-    .all();
-
-  const update = db.prepare(
-    "UPDATE command_stats SET frecency_score = ? WHERE command_hash = ?"
-  );
-
-  db.transaction(() => {
-    for (const s of stats) {
-      const weight = calculateRecencyWeight(s.last_used_at);
-      update.run(s.frequency * weight, s.command_hash);
-    }
-  })();
 }

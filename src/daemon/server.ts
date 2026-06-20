@@ -4,6 +4,7 @@ import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
 import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
 import { parseRequest, getSocketPath, getPidPath, getDaemonPort } from "./protocol";
+import { FRECENCY_EXPR } from "../db/frecency";
 import { unlinkSync, writeFileSync, existsSync } from "fs";
 import type { Socket } from "bun";
 const IDLE_TIMEOUT = 30 * 60_000; // 30 min
@@ -22,13 +23,13 @@ function initPreparedStatements() {
   suggestPrefix = db.prepare(
     `SELECT command FROM command_stats
      WHERE command LIKE ?1 || '%' ESCAPE '\\'
-     ORDER BY last_used_at DESC
+     ORDER BY ${FRECENCY_EXPR} DESC
      LIMIT ?2`
   );
   suggestContains = db.prepare(
     `SELECT command FROM command_stats
      WHERE command LIKE '%' || ?1 || '%' ESCAPE '\\' AND command != ?1
-     ORDER BY last_used_at DESC
+     ORDER BY ${FRECENCY_EXPR} DESC
      LIMIT ?2`
   );
 }
