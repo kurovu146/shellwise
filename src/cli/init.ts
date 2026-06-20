@@ -25,25 +25,48 @@ typeset -ga __sw_suggestions=()
 typeset -g __sw_selected=0
 typeset -g __sw_fd=""
 typeset -g __sw_ready=0
+typeset -g __sw_port=0
+
+# ─── Daemon connection (self-healing) ──────────────────────
+# The daemon idle-exits after inactivity and the TCP port is
+# deterministic, so the shell must be able to reconnect on
+# demand — otherwise a long-idle pane loses suggest forever.
+
+# Read daemon port from PID file (line 2). No fork (\$(<file) is builtin).
+__sw_read_port() {
+  local pf="/tmp/shellwise-\${UID}.pid"
+  [[ -f "\$pf" ]] || return 1
+  local lines=("\${(@f)\$(<\$pf)}")
+  __sw_port=\${lines[2]:-0}
+  [[ \$__sw_port -gt 0 ]]
+}
+
+# Is the daemon process alive? No fork (kill -0 is a builtin).
+__sw_daemon_alive() {
+  local pf="/tmp/shellwise-\${UID}.pid"
+  [[ -f "\$pf" ]] || return 1
+  local lines=("\${(@f)\$(<\$pf)}")
+  kill -0 \${lines[1]:-0} 2>/dev/null
+}
+
+# (Re)establish the persistent TCP connection. No fork while typing.
+__sw_connect() {
+  __sw_ready=0
+  [[ -n "\$__sw_fd" ]] && { ztcp -c \$__sw_fd 2>/dev/null; __sw_fd="" }
+  [[ \$__sw_port -gt 0 ]] || __sw_read_port || return 1
+  ztcp 127.0.0.1 \$__sw_port 2>/dev/null || return 1
+  __sw_fd=\$REPLY
+  __sw_ready=1
+}
 
 # Load TCP module + connect at shell startup
 zmodload zsh/net/tcp 2>/dev/null && {
-  # Read daemon port from PID file
-  local __sw_pidfile="/tmp/shellwise-\${UID}.pid"
-  if [[ ! -f "\$__sw_pidfile" ]]; then
+  if [[ ! -f "/tmp/shellwise-\${UID}.pid" ]]; then
     # Start daemon in background (non-blocking)
     command ${bin} daemon start &>/dev/null &!
     sleep 0.3
   fi
-  if [[ -f "\$__sw_pidfile" ]]; then
-    local __sw_port=\${"\$(sed -n 2p "\$__sw_pidfile")":-0}
-    if [[ \$__sw_port -gt 0 ]]; then
-      ztcp 127.0.0.1 \$__sw_port 2>/dev/null && {
-        __sw_fd=\$REPLY
-        __sw_ready=1
-      }
-    fi
-  fi
+  __sw_connect
 }
 
 # ─── Persistent TCP query (no connect/disconnect overhead) ─
@@ -52,14 +75,19 @@ typeset -ga __sw_tcp_result=()
 
 __sw_tcp_query() {
   __sw_tcp_result=()
-  [[ \$__sw_ready -ne 1 ]] && return 1
 
-  # Send request
-  print -u \$__sw_fd "\$1" 2>/dev/null || {
-    # Connection broken — mark unavailable
-    __sw_ready=0
-    return 1
-  }
+  # Neutralize SIGPIPE: writing to a daemon that has idle-exited must return
+  # a recoverable error, never raise a signal that freezes the line editor.
+  setopt local_options local_traps
+  trap '' PIPE
+
+  # (Re)connect if needed — daemon may have idle-exited or restarted
+  [[ \$__sw_ready -ne 1 ]] && { __sw_connect || return 1 }
+
+  # Send request; one transparent reconnect+retry on a stale connection
+  if ! print -u \$__sw_fd "\$1" 2>/dev/null; then
+    __sw_connect && print -u \$__sw_fd "\$1" 2>/dev/null || { __sw_ready=0; return 1 }
+  fi
 
   # Read response lines until empty line
   local line
@@ -87,8 +115,11 @@ __sw_precmd() {
       duration=\${duration%%.*}
     fi
 
-    # Save via persistent TCP (instant) or fallback to background process
-    __sw_tcp_query "ADD\\t\$__SW_COMMAND\\t\$PWD\\t\$exit_code\\t\$duration\\t\$SW_SESSION_ID\\tzsh" || \\
+    # Save via persistent TCP (instant). On failure, restart a dead daemon
+    # (a fork between commands is fine) so the next keystroke can reconnect,
+    # and fall back to a direct write for this command.
+    if ! __sw_tcp_query "ADD\\t\$__SW_COMMAND\\t\$PWD\\t\$exit_code\\t\$duration\\t\$SW_SESSION_ID\\tzsh"; then
+      __sw_daemon_alive || command ${bin} daemon start &>/dev/null &!
       command ${bin} add \\
         --command "\$__SW_COMMAND" \\
         --cwd "\$PWD" \\
@@ -96,6 +127,7 @@ __sw_precmd() {
         --duration "\$duration" \\
         --session "\$SW_SESSION_ID" \\
         --shell "zsh" &!
+    fi
 
     # Show update notice if available
     local __sw_line
