@@ -166,6 +166,16 @@ export function pruneOlderThan(days: number): number {
   return result.changes;
 }
 
+export function deleteCommand(command: string): boolean {
+  const db = getDb();
+  const hash = hashCommand(command);
+
+  const result = db.run("DELETE FROM commands WHERE command_hash = ?", [hash]);
+  db.run("DELETE FROM command_stats WHERE command_hash = ?", [hash]);
+
+  return result.changes > 0;
+}
+
 export function getExistingHashes(): Set<string> {
   const db = getDb();
   const rows = db
