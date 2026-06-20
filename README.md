@@ -22,14 +22,15 @@ forking while you type.
 
 ```text
   $ git s▏
-  ┌──────────────────────────────────────────────┐
-  │ › git status                        history   │   ← ranked by frecency
-  │   git switch main                   history   │     (how often × how recently)
-  │   git stash pop                     history   │
-  │   git stash list                    common    │   ← popular fallbacks
-  │   git show                          common    │
-  └──────────────────────────────────────────────┘
+  ┌─────────────────────────────────┐
+  │ › git status           history  │
+  │   git switch main      history  │
+  │   git stash pop        history  │
+  │   git stash list        common  │
+  │   git show              common  │
+  └─────────────────────────────────┘
    Tab/⇧Tab navigate · → accept inline · Enter run · Esc dismiss
+   ranked by frecency — how often × how recently you run it
 ```
 
 > **Enter always runs what *you* typed.** Suggestions never hijack your command —
@@ -140,15 +141,14 @@ sw prune --days 90 # drop everything older than 90 days
 ## 🧠 How it works
 
 ```text
-┌──────────────┐   Unix socket (persistent)   ┌──────────────────┐
-│   Zsh / Bash │◄────────────────────────────►│ shellwise daemon │
-│   (shell)    │      ~1–3 ms round-trip      │   (Bun process)  │
-└──────────────┘         0600, local-only     └────────┬─────────┘
-                                                       │
-                                              ┌────────▼─────────┐
-                                              │  SQLite (WAL)    │
-                                              │  history.db      │
-                                              └──────────────────┘
+┌──────────────┐   Unix socket · ~1–3 ms   ┌────────────────────┐
+│  Zsh / Bash  │ ◄═══════════════════════► │ shellwise daemon   │
+└──────────────┘                           └──────────┬─────────┘
+                                                      │
+                                           ┌──────────▼─────────┐
+                                           │  SQLite (WAL)      │
+                                           │  history.db        │
+                                           └────────────────────┘
 ```
 
 - **Shell hooks** (`preexec`/`precmd`) capture each command after it runs.
