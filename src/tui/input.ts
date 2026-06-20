@@ -72,7 +72,9 @@ function getTtyReadFd(): number {
 }
 
 export function readKeypress(): Buffer {
-  const buf = Buffer.alloc(16);
+  // Large enough to hold a pasted chunk in one read; a 16-byte buffer split
+  // multi-byte UTF-8 (emoji, accented chars) across reads and corrupted them.
+  const buf = Buffer.alloc(4096);
   const bytesRead = readSync(getTtyReadFd(), buf);
   return buf.subarray(0, bytesRead);
 }

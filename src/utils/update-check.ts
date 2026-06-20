@@ -31,8 +31,15 @@ function writeCache(data: CachedCheck): void {
 }
 
 function compareVersions(current: string, latest: string): number {
-  const a = current.split(".").map(Number);
-  const b = latest.split(".").map(Number);
+  // Strip a pre-release/build suffix (e.g. "1.2.3-beta") and parse each part
+  // safely; an unparseable segment must not become NaN and skew the compare.
+  const parse = (v: string) =>
+    v.split("-")[0].split(".").map((p) => {
+      const n = parseInt(p, 10);
+      return Number.isNaN(n) ? 0 : n;
+    });
+  const a = parse(current);
+  const b = parse(latest);
   for (let i = 0; i < 3; i++) {
     if ((a[i] ?? 0) < (b[i] ?? 0)) return -1;
     if ((a[i] ?? 0) > (b[i] ?? 0)) return 1;
