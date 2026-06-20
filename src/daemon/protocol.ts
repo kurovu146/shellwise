@@ -53,16 +53,21 @@ export function parseRequest(raw: string): Request | null {
   switch (type) {
     case "SUGGEST":
       return { type: "SUGGEST", query: parts[1] || "", limit: parseInt(parts[2]) || 5 };
-    case "ADD":
+    case "ADD": {
+      // Distinguish a real 0 from an unparseable/missing field (a desynced
+      // line must not masquerade as a successful exit code 0).
+      const exit = parseInt(parts[3]);
+      const dur = parseInt(parts[4]);
       return {
         type: "ADD",
         command: parts[1] || "",
         cwd: parts[2] || "",
-        exitCode: parseInt(parts[3]) || 0,
-        duration: parseInt(parts[4]) || 0,
+        exitCode: Number.isNaN(exit) ? -1 : exit,
+        duration: Number.isNaN(dur) ? 0 : dur,
         session: parts[5] || "",
         shell: parts[6] || "",
       };
+    }
     case "STOP":
       return { type: "STOP" };
     case "PING":
@@ -75,12 +80,6 @@ export function parseRequest(raw: string): Request | null {
 export function getSocketPath(): string {
   const uid = process.getuid?.() ?? process.pid;
   return `/tmp/shellwise-${uid}.sock`;
-}
-
-/** TCP port = 19850 + (uid % 100) to avoid collisions */
-export function getDaemonPort(): number {
-  const uid = process.getuid?.() ?? 501;
-  return 19850 + (uid % 100);
 }
 
 export function getPidPath(): string {

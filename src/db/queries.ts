@@ -38,8 +38,14 @@ export function hashCommand(command: string): string {
 }
 
 export function insertCommand(input: InsertCommandInput): void {
+  // Defense in depth: strip control chars (incl. NUL/tab/newline) and cap
+  // length before persisting, so a garbage/poisoned ADD can't store binary
+  // blobs or megabyte lines that later corrupt TUI rendering.
+  const command = input.command.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  if (command.length < 2 || command.length > 8192) return;
+
   const db = getDb();
-  const hash = hashCommand(input.command);
+  const hash = hashCommand(command);
   const now = Date.now();
 
   db.transaction(() => {
@@ -47,7 +53,7 @@ export function insertCommand(input: InsertCommandInput): void {
       `INSERT INTO commands (command, command_hash, cwd, exit_code, duration_ms, hostname, session_id, shell, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        input.command,
+        command,
         hash,
         input.cwd ?? null,
         input.exit_code ?? null,
@@ -69,7 +75,7 @@ export function insertCommand(input: InsertCommandInput): void {
          frequency = frequency + 1,
          last_used_at = ?,
          frecency_score = frequency + 1`,
-      [hash, input.command.trim(), now, now]
+      [hash, command, now, now]
     );
   })();
 }

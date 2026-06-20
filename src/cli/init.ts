@@ -25,23 +25,15 @@ typeset -ga __sw_suggestions=()
 typeset -g __sw_selected=0
 typeset -g __sw_fd=""
 typeset -g __sw_ready=0
-typeset -g __sw_port=0
+# ─── Daemon connection (self-healing, Unix socket) ─────────
+# Unix-domain socket: protected by filesystem permissions (0600), unlike a
+# guessable localhost TCP port with no auth. The daemon idle-exits after
+# inactivity, so the shell must reconnect on demand — otherwise a long-idle
+# pane loses suggest forever.
 
-# ─── Daemon connection (self-healing) ──────────────────────
-# The daemon idle-exits after inactivity and the TCP port is
-# deterministic, so the shell must be able to reconnect on
-# demand — otherwise a long-idle pane loses suggest forever.
+typeset -g __sw_sock="/tmp/shellwise-\${UID}.sock"
 
-# Read daemon port from PID file (line 2). No fork (\$(<file) is builtin).
-__sw_read_port() {
-  local pf="/tmp/shellwise-\${UID}.pid"
-  [[ -f "\$pf" ]] || return 1
-  local lines=("\${(@f)\$(<\$pf)}")
-  __sw_port=\${lines[2]:-0}
-  [[ \$__sw_port -gt 0 ]]
-}
-
-# Is the daemon process alive? No fork (kill -0 is a builtin).
+# Is the daemon process alive? No fork (kill -0 + \$(<file) are builtins).
 __sw_daemon_alive() {
   local pf="/tmp/shellwise-\${UID}.pid"
   [[ -f "\$pf" ]] || return 1
@@ -49,19 +41,19 @@ __sw_daemon_alive() {
   kill -0 \${lines[1]:-0} 2>/dev/null
 }
 
-# (Re)establish the persistent TCP connection. No fork while typing.
+# (Re)establish the persistent connection. No fork while typing.
 __sw_connect() {
   __sw_ready=0
-  [[ -n "\$__sw_fd" ]] && { ztcp -c \$__sw_fd 2>/dev/null; __sw_fd="" }
-  [[ \$__sw_port -gt 0 ]] || __sw_read_port || return 1
-  ztcp 127.0.0.1 \$__sw_port 2>/dev/null || return 1
+  [[ -n "\$__sw_fd" ]] && { zsocket -c \$__sw_fd 2>/dev/null; __sw_fd="" }
+  [[ -S "\$__sw_sock" ]] || return 1
+  zsocket "\$__sw_sock" 2>/dev/null || return 1
   __sw_fd=\$REPLY
   __sw_ready=1
 }
 
-# Load TCP module + connect at shell startup
-zmodload zsh/net/tcp 2>/dev/null && {
-  if [[ ! -f "/tmp/shellwise-\${UID}.pid" ]]; then
+# Load socket module + connect at shell startup
+zmodload zsh/net/socket 2>/dev/null && {
+  if [[ ! -S "\$__sw_sock" ]]; then
     # Start daemon in background (non-blocking)
     command ${bin} daemon start &>/dev/null &!
     sleep 0.3
@@ -69,11 +61,15 @@ zmodload zsh/net/tcp 2>/dev/null && {
   __sw_connect
 }
 
-# ─── Persistent TCP query (no connect/disconnect overhead) ─
+# ─── Persistent query (no connect/disconnect overhead) ─────
 
 typeset -ga __sw_tcp_result=()
 
-__sw_tcp_query() {
+# Args: TYPE field1 field2 ...  Fields are joined with REAL tabs and sent raw
+# (print -r) so a literal backslash-t/-n the user typed is preserved; any REAL
+# tab/newline (e.g. from a paste) is stripped to a space so it cannot break
+# the protocol framing.
+__sw_query() {
   __sw_tcp_result=()
 
   # Neutralize SIGPIPE: writing to a daemon that has idle-exited must return
@@ -81,20 +77,28 @@ __sw_tcp_query() {
   setopt local_options local_traps
   trap '' PIPE
 
+  local -a __sw_fields=()
+  local __sw_f
+  for __sw_f in "\$@"; do __sw_fields+=("\${__sw_f//[\$'\\t\\n']/ }"); done
+  local __sw_req="\${(pj:\\t:)__sw_fields}"
+
   # (Re)connect if needed — daemon may have idle-exited or restarted
   [[ \$__sw_ready -ne 1 ]] && { __sw_connect || return 1 }
 
-  # Send request; one transparent reconnect+retry on a stale connection
-  if ! print -u \$__sw_fd "\$1" 2>/dev/null; then
-    __sw_connect && print -u \$__sw_fd "\$1" 2>/dev/null || { __sw_ready=0; return 1 }
+  # Send raw; one transparent reconnect+retry on a stale connection
+  if ! print -ru \$__sw_fd -- "\$__sw_req" 2>/dev/null; then
+    __sw_connect && print -ru \$__sw_fd -- "\$__sw_req" 2>/dev/null || { __sw_ready=0; return 1 }
   fi
 
-  # Read response lines until empty line
-  local line
-  while IFS= read -r -t 0.1 -u \$__sw_fd line 2>/dev/null; do
-    [[ -z "\$line" ]] && break
-    __sw_tcp_result+=("\$line")
+  # Read until the blank-line terminator. A timeout means an incomplete
+  # response (slow/dead daemon) — reconnect to drain leftover bytes so the
+  # next query cannot read a stale response (protocol desync).
+  local __sw_line __sw_got=0
+  while IFS= read -r -t 0.2 -u \$__sw_fd __sw_line 2>/dev/null; do
+    [[ -z "\$__sw_line" ]] && { __sw_got=1; break }
+    __sw_tcp_result+=("\$__sw_line")
   done
+  [[ \$__sw_got -eq 1 ]] || { __sw_connect; return 1 }
 
   [[ \${#__sw_tcp_result} -gt 0 ]]
 }
@@ -118,7 +122,7 @@ __sw_precmd() {
     # Save via persistent TCP (instant). On failure, restart a dead daemon
     # (a fork between commands is fine) so the next keystroke can reconnect,
     # and fall back to a direct write for this command.
-    if ! __sw_tcp_query "ADD\\t\$__SW_COMMAND\\t\$PWD\\t\$exit_code\\t\$duration\\t\$SW_SESSION_ID\\tzsh"; then
+    if ! __sw_query ADD "\$__SW_COMMAND" "\$PWD" "\$exit_code" "\$duration" "\$SW_SESSION_ID" zsh; then
       __sw_daemon_alive || command ${bin} daemon start &>/dev/null &!
       command ${bin} add \\
         --command "\$__SW_COMMAND" \\
@@ -177,15 +181,17 @@ __sw_render() {
 __sw_suggest() {
   [[ "\$BUFFER" == "\$__sw_prev_buffer" ]] && return
   __sw_prev_buffer="\$BUFFER"
-  __sw_selected=0
+  # -1 = cursor on the typed line, no item selected yet (Enter runs BUFFER).
+  # Tab moves into the list (0 = first item).
+  __sw_selected=-1
   __sw_suggestions=()
   POSTDISPLAY=""
   region_highlight=()
 
   [[ \${#BUFFER} -lt 2 ]] && return
 
-  # TCP query only — no fallback, never spawn process during typing
-  __sw_tcp_query "SUGGEST\\t\$BUFFER\\t5" || return
+  # Socket query only — no fallback, never spawn process during typing
+  __sw_query SUGGEST "\$BUFFER" 5 || return
 
   __sw_suggestions=("\${__sw_tcp_result[@]}")
   __sw_render
@@ -223,7 +229,12 @@ __sw_next() {
 
 __sw_prev() {
   if [[ \${#__sw_suggestions} -gt 0 ]]; then
-    __sw_selected=\$(( (__sw_selected - 1 + \${#__sw_suggestions}) % \${#__sw_suggestions} ))
+    if [[ \$__sw_selected -lt 0 ]]; then
+      # From the typed line, Shift+Tab wraps to the last item
+      __sw_selected=\$(( \${#__sw_suggestions} - 1 ))
+    else
+      __sw_selected=\$(( (__sw_selected - 1 + \${#__sw_suggestions}) % \${#__sw_suggestions} ))
+    fi
     __sw_render
   else
     zle .reverse-menu-complete
@@ -233,16 +244,18 @@ __sw_prev() {
 # ─── Enter: accept selected or execute ─────────────────────
 
 __sw_accept_line() {
-  if [[ \${#__sw_suggestions} -gt 0 ]]; then
+  # Only replace BUFFER when the user has actually moved into the list
+  # (Tab/Shift+Tab → __sw_selected >= 0). With nothing selected, Enter runs
+  # exactly what was typed.
+  if [[ \${#__sw_suggestions} -gt 0 && \$__sw_selected -ge 0 ]]; then
     BUFFER="\${__sw_suggestions[\$(( __sw_selected + 1 ))]}"
     CURSOR=\${#BUFFER}
-    POSTDISPLAY=""
-    region_highlight=()
-    __sw_suggestions=()
-    __sw_prev_buffer="\$BUFFER"
-  else
-    zle .accept-line
   fi
+  POSTDISPLAY=""
+  region_highlight=()
+  __sw_suggestions=()
+  __sw_prev_buffer="\$BUFFER"
+  zle .accept-line
 }
 
 # ─── Escape: clear suggestions ─────────────────────────────
@@ -262,7 +275,9 @@ __sw_dismiss() {
 
 __sw_forward_char() {
   if [[ \${#__sw_suggestions} -gt 0 && \$CURSOR -eq \${#BUFFER} ]]; then
-    BUFFER="\${__sw_suggestions[\$(( __sw_selected + 1 ))]}"
+    # Accept inline: nothing selected yet → take the top item (index 1)
+    local idx=\$(( __sw_selected < 0 ? 1 : __sw_selected + 1 ))
+    BUFFER="\${__sw_suggestions[\$idx]}"
     CURSOR=\${#BUFFER}
     POSTDISPLAY=""
     region_highlight=()

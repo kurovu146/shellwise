@@ -3,15 +3,17 @@ import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
 import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
-import { parseRequest, getSocketPath, getPidPath, getDaemonPort } from "./protocol";
+import { parseRequest, getSocketPath, getPidPath } from "./protocol";
 import { FRECENCY_EXPR } from "../db/frecency";
-import { unlinkSync, writeFileSync, existsSync } from "fs";
+import { unlinkSync, writeFileSync, existsSync, chmodSync } from "fs";
 import type { Socket } from "bun";
+
+// Reject a connection that floods us without ever sending a newline.
+const MAX_LINE_BYTES = 64 * 1024;
 const IDLE_TIMEOUT = 30 * 60_000; // 30 min
 
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let server: ReturnType<typeof Bun.listen> | null = null;
-let tcpServer: ReturnType<typeof Bun.listen> | null = null;
 let updateNotified = false;
 
 // Pre-warm DB + prepared statements on start
@@ -152,37 +154,42 @@ export function startServer(): void {
   initPreparedStatements();
 
   const socketHandlers = {
-    data(socket: Socket, data: Buffer) {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (line.trim()) {
-          const response = handleRequest(line);
-          socket.write(response);
-        }
-      }
+    open(socket: Socket) {
+      // Per-connection accumulator: TCP/stream sockets don't preserve message
+      // boundaries, so buffer partial reads and only act on complete lines.
+      (socket as unknown as { buf: string }).buf = "";
     },
-    open() {},
+    data(socket: Socket, data: Buffer) {
+      const state = socket as unknown as { buf: string };
+      let buf = state.buf + data.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line.trim()) socket.write(handleRequest(line));
+      }
+      // Drop a pathologically long line with no terminator (flood guard)
+      state.buf = buf.length > MAX_LINE_BYTES ? "" : buf;
+    },
     close() {},
     error(_socket: Socket, error: Error) {
       console.error("[shellwise daemon] socket error:", error.message);
     },
   };
 
-  // Listen on both Unix socket and TCP (for ztcp from zsh)
+  // Unix-domain socket only — protected by filesystem permissions (0600).
+  // No TCP: a guessable localhost port with no auth would let any local
+  // process poison history or read it.
   server = Bun.listen({
     unix: socketPath,
     socket: socketHandlers,
   });
+  try {
+    chmodSync(socketPath, 0o600);
+  } catch {}
 
-  const port = getDaemonPort();
-  tcpServer = Bun.listen({
-    hostname: "127.0.0.1",
-    port,
-    socket: socketHandlers,
-  });
-
-  // Save PID + port
-  writeFileSync(pidPath, `${process.pid}\n${port}`);
+  // Save PID (owner-only)
+  writeFileSync(pidPath, `${process.pid}`, { mode: 0o600 });
 
   resetIdleTimer();
 
@@ -200,10 +207,6 @@ export function stopServer(): void {
   if (server) {
     server.stop(true);
     server = null;
-  }
-  if (tcpServer) {
-    tcpServer.stop(true);
-    tcpServer = null;
   }
   closeDb();
 
@@ -237,13 +240,13 @@ export function isDaemonRunning(): boolean {
   }
 }
 
-export function getDaemonInfo(): { pid: number; port: number } | null {
+export function getDaemonInfo(): { pid: number } | null {
   const pidPath = getPidPath();
   if (!existsSync(pidPath)) return null;
   try {
     const content = require("fs").readFileSync(pidPath, "utf-8").trim();
-    const lines = content.split("\n");
-    return { pid: parseInt(lines[0]), port: parseInt(lines[1]) };
+    const pid = parseInt(content.split("\n")[0]);
+    return Number.isNaN(pid) ? null : { pid };
   } catch {
     return null;
   }

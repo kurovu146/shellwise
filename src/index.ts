@@ -154,7 +154,7 @@ async function main(): Promise<void> {
             await new Promise((r) => setTimeout(r, 200));
             if (isDaemonRunning()) {
               const info = getDaemonInfo();
-              console.log(`Daemon started (pid: ${info?.pid}, port: ${info?.port})`);
+              console.log(`Daemon started (pid: ${info?.pid})`);
             } else {
               console.error("Failed to start daemon.");
               process.exit(1);
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
           case "status": {
             if (isDaemonRunning()) {
               const info = getDaemonInfo();
-              console.log(`Daemon running (pid: ${info?.pid}, port: ${info?.port})`);
+              console.log(`Daemon running (pid: ${info?.pid})`);
             } else {
               console.log("Daemon not running.");
             }
