@@ -45,10 +45,9 @@ export function pickCommand(initialQuery: string = ""): string | null {
   write(hideCursor());
 
   const cleanup = () => {
-    // Clear rendered UI
-    if (state.renderedLines > 0) {
-      write(moveCursorUp(state.renderedLines));
-    }
+    // After render() the cursor sits on the frame's first line (the search
+    // box), so clearing down from here wipes exactly the UI — moving up
+    // first would erase scrollback content above the frame.
     write(clearDown());
     write(showCursor());
     write(moveCursorToColumn(1));
@@ -217,10 +216,17 @@ function adjustScroll(state: SearchState): void {
 function render(state: SearchState): void {
   const { cols } = getTerminalSize();
   const visibleCount = getVisibleCount();
+  const totalLines = visibleCount + 4; // search box + 2 separators + status bar
 
   // Move up to clear previous render
   if (state.renderedLines > 0) {
     write(moveCursorUp(state.renderedLines));
+  } else {
+    // First paint: reserve the frame's height up-front so any terminal
+    // scrolling happens now. Painting first and moving up after would leave
+    // the cursor math off by the scrolled amount (CUU clamps at the top row),
+    // shifting later frames and stranding ghost lines below the frame.
+    write("\r\n".repeat(totalLines) + moveCursorUp(totalLines));
   }
 
   const lines: string[] = [];
@@ -258,8 +264,10 @@ function render(state: SearchState): void {
   lines.push(clearLine() + `\x1b[90m${"─".repeat(cols)}\x1b[0m`);
   lines.push(clearLine() + renderStatusBar(state.results.length, cols));
 
-  // Write all lines
+  // Write all lines, then wipe anything stale below the frame (e.g. leftovers
+  // from a previous, taller frame after a terminal resize)
   write(lines.join("\r\n") + "\r\n");
+  write(clearDown());
 
   // Track rendered lines for next clear
   state.renderedLines = lines.length;
