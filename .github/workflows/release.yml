@@ -2,12 +2,11 @@ name: release
 
 # Push a version tag (e.g. v0.3.2) → build binaries, publish a GitHub Release,
 # and bump the Homebrew tap formula automatically.
+# npm publish is done manually (npm publish from the repo root).
 #
 # Required secret:
 #   HOMEBREW_TAP_TOKEN  PAT with write access to the tap repo (classic: `repo`,
 #                       or fine-grained: Contents=write on kurovu146/homebrew-tap).
-# Optional secret:
-#   NPM_TOKEN           npm automation token (bypasses 2FA) to also publish to npm.
 on:
   push:
     tags:
@@ -45,23 +44,3 @@ jobs:
           REPO: ${{ github.repository }}
           TAP: kurovu146/homebrew-tap
         run: bash scripts/update-formula.sh
-
-  # Optional — only runs if NPM_TOKEN is set. npm automation tokens bypass 2FA.
-  publish-npm:
-    runs-on: ubuntu-latest
-    needs: release
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Publish to npm
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "NPM_TOKEN not set — skipping npm publish."
-            exit 0
-          fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
-          npm publish
