@@ -1,6 +1,8 @@
 node_modules/
 dist/
 release/
+docs/launch-drafts.md
+docs/superpowers/
 *.db
 *.db-wal
 *.db-shm

@@ -20,18 +20,11 @@ forking while you type.
 
 ---
 
-```text
-  $ git s▏
-  ┌─────────────────────────────────┐
-  │ › git status           history  │
-  │   git switch main      history  │
-  │   git stash pop        history  │
-  │   git stash list        common  │
-  │   git show              common  │
-  └─────────────────────────────────┘
-   Tab/⇧Tab navigate · → accept inline · Enter run · Esc dismiss
-   ranked by frecency — how often × how recently you run it
-```
+<div align="center">
+  <img src="assets/demo.gif" alt="shellwise demo — a ranked dropdown appears under the prompt as you type, then Ctrl+R fuzzy search" width="800">
+  <br>
+  <sub>Tab/⇧Tab navigate · → accept inline · Enter run · Esc dismiss — ranked by <b>frecency</b>: how often × how recently you run it</sub>
+</div>
 
 > **Enter always runs what *you* typed.** Suggestions never hijack your command —
 > press `Tab` to step into the list only when you actually want one.
@@ -43,6 +36,23 @@ forking while you type.
 - ⌨️ **No `Ctrl+R` required** — see matches inline as you type. (`Ctrl+R` is still there for full-screen fuzzy search when you want it.)
 - 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket. Nothing leaves your computer.
 - 📦 **Zero config** — one install, shell integration auto-injected, done.
+
+## 🆚 How it compares
+
+All of these are excellent tools — the difference is *where* the suggestions live:
+
+| | **shellwise** | [atuin](https://github.com/atuinsh/atuin) | [mcfly](https://github.com/cantino/mcfly) | [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) |
+|---|:---:|:---:|:---:|:---:|
+| Suggests **while you type** | ✅ dropdown | ❌ `Ctrl+R` only | ❌ `Ctrl+R` only | ✅ ghost text |
+| Multiple candidates visible | ✅ | in `Ctrl+R` TUI | in `Ctrl+R` TUI | ❌ single |
+| Ranking | frecency | recency + context filters | neural network | most recent prefix match |
+| Fuzzy `Ctrl+R` search | ✅ | ✅ | ✅ | ❌ |
+| Cross-machine sync | ❌ local-only by design | ✅ optional e2e-encrypted | ❌ | ❌ |
+| Bash support | ✅ (`Ctrl+R` + auto-save) | ✅ | ✅ | ❌ zsh only |
+
+**TL;DR** — if you want encrypted history sync across machines, use atuin.
+If you want a ranked dropdown **under your prompt as you type** — no keybind,
+no context switch — that's shellwise.
 
 ## ✨ Features
 
@@ -61,15 +71,18 @@ forking while you type.
 > **This is a CLI tool — install it globally.**
 
 ```bash
-# Homebrew (recommended)
+# Homebrew (recommended — standalone binary, nothing else to install)
 brew install kurovu146/tap/shellwise
 
-# Bun
+# Bun (requires Bun ≥ 1.0)
 bun install -g shellwise
 
-# npm
+# npm (requires Bun ≥ 1.0 as the runtime)
 npm install -g shellwise
 ```
+
+> The Homebrew formula (and the tarballs on [GitHub Releases](https://github.com/kurovu146/shellwise/releases))
+> ship a **self-contained binary** — you do **not** need Bun, Node, or any other runtime.
 
 Shell integration is auto-injected into your `~/.zshrc` or `~/.bashrc`.
 **Open a new terminal** (or `source` your rc file) to activate.
@@ -170,8 +183,9 @@ Everything is local to your machine:
 
 ## ✅ Requirements
 
-- [Bun](https://bun.sh) ≥ 1.0.0
+- macOS or Linux
 - Zsh (full experience) or Bash (auto-save + `Ctrl+R` search)
+- [Bun](https://bun.sh) ≥ 1.0.0 — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries are standalone.
 
 ## ⬆️ Update
 
