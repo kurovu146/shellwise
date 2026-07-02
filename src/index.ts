@@ -143,8 +143,14 @@ async function main(): Promise<void> {
               console.log("Daemon already running.");
               return;
             }
-            // Fork to background
-            const proc = Bun.spawn(["shellwise", "daemon", "_run"], {
+            // Fork to background — respawn THIS executable, never a PATH
+            // lookup (which could resolve to a different install). Compiled
+            // binaries report a virtual /$bunfs Bun.main and a real execPath;
+            // script mode is the reverse (execPath is the bun runtime).
+            const self = Bun.main.startsWith("/$bunfs")
+              ? [process.execPath]
+              : [process.execPath, Bun.main];
+            const proc = Bun.spawn([...self, "daemon", "_run"], {
               stdio: ["ignore", "ignore", "ignore"],
               // @ts-ignore - Bun supports detached
               detached: true,
