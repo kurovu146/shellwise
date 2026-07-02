@@ -39,6 +39,7 @@ class Shellwise < Formula
 
       def install
         bin.install "shellwise-darwin-arm64" => "shellwise"
+        bin.install_symlink "shellwise" => "sw"
       end
     else
       url "${base}/shellwise-darwin-x64.tar.gz"
@@ -46,6 +47,7 @@ class Shellwise < Formula
 
       def install
         bin.install "shellwise-darwin-x64" => "shellwise"
+        bin.install_symlink "shellwise" => "sw"
       end
     end
   end
@@ -57,6 +59,7 @@ class Shellwise < Formula
 
       def install
         bin.install "shellwise-linux-arm64" => "shellwise"
+        bin.install_symlink "shellwise" => "sw"
       end
     else
       url "${base}/shellwise-linux-x64.tar.gz"
@@ -64,6 +67,7 @@ class Shellwise < Formula
 
       def install
         bin.install "shellwise-linux-x64" => "shellwise"
+        bin.install_symlink "shellwise" => "sw"
       end
     end
   end
