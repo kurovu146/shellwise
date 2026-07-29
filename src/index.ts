@@ -4,6 +4,7 @@ import { runAdd } from "./cli/add";
 import { runSearch, pickCommand } from "./cli/search";
 import { runSuggest } from "./cli/suggest";
 import { runInit } from "./cli/init";
+import { runSsh } from "./cli/ssh";
 import { runImport } from "./cli/import";
 import { runStats } from "./cli/stats";
 import { runPrune } from "./cli/prune";
@@ -39,6 +40,7 @@ Commands:
   add <cmd>                   Save a command to history
   delete <cmd>                Delete a command from history
   init <zsh|bash>             Output shell integration script
+  ssh [ssh options] <host>    SSH with suggestions on the remote host
   import [zsh|bash]           Import existing shell history
   stats                       Show usage statistics
   prune --days <n>            Remove entries older than n days
@@ -53,7 +55,8 @@ Features:
   - Auto-save: commands are recorded automatically
   - Auto-suggest: inline dropdown as you type (Tab/S-Tab to navigate)
   - Ctrl+R: full interactive fuzzy search
-  - Daemon mode: ~1-3ms suggest via Unix socket`);
+  - Daemon mode: ~1-3ms suggest via Unix socket
+  - sw ssh: same dropdown on a remote host, nothing installed there`);
 }
 
 async function main(): Promise<void> {
@@ -111,10 +114,17 @@ async function main(): Promise<void> {
       case "init": {
         const shell = args[1];
         if (!shell) {
-          console.error("Usage: shellwise init <zsh|bash>");
+          console.error("Usage: shellwise init <zsh|bash> [--remote]");
           process.exit(1);
         }
-        runInit(shell, "shellwise");
+        runInit(shell, "shellwise", { remote: args.includes("--remote") });
+        break;
+      }
+
+      case "ssh": {
+        const sshArgs = args.slice(1).filter((a) => a !== "--save-history");
+        const code = await runSsh(sshArgs, { allowWrite: args.includes("--save-history") });
+        if (code !== 0) process.exitCode = code;
         break;
       }
 

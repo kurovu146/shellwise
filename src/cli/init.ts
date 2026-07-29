@@ -1,9 +1,22 @@
-export function runInit(shell: string, binaryPath: string): void {
+export interface InitOptions {
+  /**
+   * Remote mode: the script runs on a host where shellwise is NOT installed,
+   * talking to a socket forwarded back to the local daemon (see `sw ssh`).
+   * Everything that shells out to the binary is dropped.
+   */
+  remote?: boolean;
+}
+
+export function runInit(shell: string, binaryPath: string, opts: InitOptions = {}): void {
   switch (shell) {
     case "zsh":
-      process.stdout.write(generateZshScript(binaryPath));
+      process.stdout.write(generateZshScript(binaryPath, opts));
       break;
     case "bash":
+      if (opts.remote) {
+        console.error("Remote mode supports zsh only (bash integration needs the binary).");
+        process.exit(1);
+      }
       process.stdout.write(generateBashScript(binaryPath));
       break;
     default:
@@ -12,7 +25,81 @@ export function runInit(shell: string, binaryPath: string): void {
   }
 }
 
-function generateZshScript(bin: string): string {
+export function generateZshScript(bin: string, opts: InitOptions = {}): string {
+  const remote = opts.remote === true;
+
+  // Remote: the socket path is handed down by `sw ssh` via the environment,
+  // because the forwarded socket lives at a per-session path on the remote /tmp.
+  const socketLine = remote
+    ? `typeset -g __sw_sock="\${SHELLWISE_SOCKET}"`
+    : `typeset -g __sw_sock="/tmp/shellwise-\${UID}.sock"`;
+
+  // Remote: no binary to spawn and no pid file to inspect — just connect.
+  const bootstrap = remote
+    ? `zmodload zsh/net/socket 2>/dev/null && __sw_connect`
+    : `zmodload zsh/net/socket 2>/dev/null && {
+  if [[ ! -S "\$__sw_sock" ]]; then
+    # Start daemon in background (non-blocking)
+    command ${bin} daemon start &>/dev/null &!
+    sleep 0.3
+  fi
+  __sw_connect
+}`;
+
+  const daemonAlive = remote
+    ? ""
+    : `# Is the daemon process alive? No fork (kill -0 + \$(<file) are builtins).
+__sw_daemon_alive() {
+  local pf="/tmp/shellwise-\${UID}.pid"
+  [[ -f "\$pf" ]] || return 1
+  local lines=("\${(@f)\$(<\$pf)}")
+  kill -0 \${lines[1]:-0} 2>/dev/null
+}
+`;
+
+  // Remote: a failed ADD is simply dropped. There is no binary to fall back to,
+  // and the forwarded socket may be read-only anyway.
+  const addCommand = remote
+    ? `    __sw_query ADD "\$__SW_COMMAND" "\$PWD" "\$exit_code" "\$duration" "\$SW_SESSION_ID" zsh || true`
+    : `    # Save via persistent TCP (instant). On failure, restart a dead daemon
+    # (a fork between commands is fine) so the next keystroke can reconnect,
+    # and fall back to a direct write for this command.
+    if ! __sw_query ADD "\$__SW_COMMAND" "\$PWD" "\$exit_code" "\$duration" "\$SW_SESSION_ID" zsh; then
+      __sw_daemon_alive || command ${bin} daemon start &>/dev/null &!
+      command ${bin} add \\
+        --command "\$__SW_COMMAND" \\
+        --cwd "\$PWD" \\
+        --exit-code "\$exit_code" \\
+        --duration "\$duration" \\
+        --session "\$SW_SESSION_ID" \\
+        --shell "zsh" &!
+    fi`;
+
+  // Remote: Ctrl+R opens the TUI, which is a binary. Leave the key alone so the
+  // host's own history search keeps working.
+  const searchWidget = remote
+    ? ""
+    : `# ─── Ctrl+R: full interactive search ───────────────────────
+
+__sw_search_widget() {
+  POSTDISPLAY=""
+  region_highlight=()
+  __sw_suggestions=()
+  local selected
+  selected="\$(command ${bin} search --query "\$LBUFFER" </dev/tty 2>/dev/tty)"
+  local ret=\$?
+  if [[ \$ret -eq 0 && -n "\$selected" ]]; then
+    BUFFER="\$selected"
+    CURSOR=\${#BUFFER}
+  fi
+  __sw_prev_buffer="\$BUFFER"
+  zle reset-prompt
+}
+`;
+
+  const searchRegistration = remote ? "" : `zle -N __sw_search_widget\n`;
+  const searchBinding = remote ? "" : `bindkey '^R' __sw_search_widget\n`;
+
   return `
 # --- shellwise shell integration ---
 
@@ -31,16 +118,9 @@ typeset -g __sw_ready=0
 # inactivity, so the shell must reconnect on demand — otherwise a long-idle
 # pane loses suggest forever.
 
-typeset -g __sw_sock="/tmp/shellwise-\${UID}.sock"
+${socketLine}
 
-# Is the daemon process alive? No fork (kill -0 + \$(<file) are builtins).
-__sw_daemon_alive() {
-  local pf="/tmp/shellwise-\${UID}.pid"
-  [[ -f "\$pf" ]] || return 1
-  local lines=("\${(@f)\$(<\$pf)}")
-  kill -0 \${lines[1]:-0} 2>/dev/null
-}
-
+${daemonAlive}
 # (Re)establish the persistent connection. No fork while typing.
 __sw_connect() {
   __sw_ready=0
@@ -52,14 +132,7 @@ __sw_connect() {
 }
 
 # Load socket module + connect at shell startup
-zmodload zsh/net/socket 2>/dev/null && {
-  if [[ ! -S "\$__sw_sock" ]]; then
-    # Start daemon in background (non-blocking)
-    command ${bin} daemon start &>/dev/null &!
-    sleep 0.3
-  fi
-  __sw_connect
-}
+${bootstrap}
 
 # ─── Persistent query (no connect/disconnect overhead) ─────
 
@@ -119,19 +192,7 @@ __sw_precmd() {
       duration=\${duration%%.*}
     fi
 
-    # Save via persistent TCP (instant). On failure, restart a dead daemon
-    # (a fork between commands is fine) so the next keystroke can reconnect,
-    # and fall back to a direct write for this command.
-    if ! __sw_query ADD "\$__SW_COMMAND" "\$PWD" "\$exit_code" "\$duration" "\$SW_SESSION_ID" zsh; then
-      __sw_daemon_alive || command ${bin} daemon start &>/dev/null &!
-      command ${bin} add \\
-        --command "\$__SW_COMMAND" \\
-        --cwd "\$PWD" \\
-        --exit-code "\$exit_code" \\
-        --duration "\$duration" \\
-        --session "\$SW_SESSION_ID" \\
-        --shell "zsh" &!
-    fi
+${addCommand}
 
     # Show update notice if available
     local __sw_line
@@ -288,23 +349,7 @@ __sw_forward_char() {
   fi
 }
 
-# ─── Ctrl+R: full interactive search ───────────────────────
-
-__sw_search_widget() {
-  POSTDISPLAY=""
-  region_highlight=()
-  __sw_suggestions=()
-  local selected
-  selected="\$(command ${bin} search --query "\$LBUFFER" </dev/tty 2>/dev/tty)"
-  local ret=\$?
-  if [[ \$ret -eq 0 && -n "\$selected" ]]; then
-    BUFFER="\$selected"
-    CURSOR=\${#BUFFER}
-  fi
-  __sw_prev_buffer="\$BUFFER"
-  zle reset-prompt
-}
-
+${searchWidget}
 # ─── Register widgets & bindings ───────────────────────────
 
 zle -N self-insert __sw_self_insert
@@ -315,14 +360,12 @@ zle -N __sw_prev
 zle -N __sw_accept_line
 zle -N __sw_dismiss
 zle -N __sw_forward_char
-zle -N __sw_search_widget
-
+${searchRegistration}
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __sw_preexec
 add-zsh-hook precmd __sw_precmd
 
-bindkey '^R' __sw_search_widget
-bindkey '\\t' __sw_next
+${searchBinding}bindkey '\\t' __sw_next
 bindkey '^[[Z' __sw_prev
 bindkey '^M' __sw_accept_line
 bindkey '^[' __sw_dismiss

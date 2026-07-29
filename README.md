@@ -48,6 +48,7 @@ All of these are excellent tools — the difference is *where* the suggestions l
 | Ranking | frecency | recency + context filters | neural network | most recent prefix match |
 | Fuzzy `Ctrl+R` search | ✅ | ✅ | ✅ | ❌ |
 | Cross-machine sync | ❌ local-only by design | ✅ optional e2e-encrypted | ❌ | ❌ |
+| Works over SSH with nothing installed remotely | ✅ `sw ssh` | ❌ install on both ends | ❌ | ❌ |
 | Bash support | ✅ (`Ctrl+R` + auto-save) | ✅ | ✅ | ❌ zsh only |
 
 **TL;DR** — if you want encrypted history sync across machines, use atuin.
@@ -123,11 +124,38 @@ Just start typing. After 2+ characters, suggestions from your history appear inl
 | `Enter` | Paste the selected command to your prompt |
 | `Esc` | Cancel |
 
+### Over SSH — with nothing installed on the remote host
+
+```bash
+sw ssh vps.example.com          # instead of: ssh vps.example.com
+sw ssh -p 2222 user@host        # your usual ssh flags still work
+```
+
+The dropdown appears on the remote prompt, ranked by **your** history. The
+remote host gets no binary, no runtime, and no edit to its `~/.zshrc`: the
+integration is pure zsh, shipped over as a throwaway `ZDOTDIR`, talking to a
+socket reverse-forwarded back to your local daemon. Your history file never
+leaves your machine.
+
+```text
+remote zsh ──▶ /tmp/shellwise-ssh-*.sock ══ ssh -R ══▶ local proxy ──▶ daemon ──▶ history.db
+```
+
+Because that socket is reachable by anyone with root on the remote box, the
+proxy is **read-only**: it answers `SUGGEST`, and silently drops `ADD` and
+`STOP`. So a compromised host can neither plant a command in your history nor
+stop your daemon. Pass `--save-history` if you do want remote commands recorded.
+
+Needs zsh on the remote host (`Ctrl+R` search stays the host's own — the TUI
+needs the binary). No zsh over there, or forwarding blocked? You get a normal
+shell instead of a broken one.
+
 ## 🔧 Commands
 
 Both `shellwise` and the short alias `sw` work:
 
 ```bash
+sw ssh [ssh options] <host>    # SSH with suggestions on the remote host
 sw search [--query <text>]     # Interactive fuzzy search (same as Ctrl+R)
 sw delete [query]              # Interactively search & delete an entry
 sw import [zsh|bash]           # Import your existing shell history
@@ -179,6 +207,7 @@ Everything is local to your machine:
 ~/.config/shellwise/                   # config (reserved)
 /tmp/shellwise-<uid>.sock              # Unix socket  (mode 0600)
 /tmp/shellwise-<uid>.pid               # daemon PID   (mode 0600)
+/tmp/shellwise-ssh-<uid>-<rand>.sock   # per-session `sw ssh` proxy (mode 0600)
 ```
 
 ## ✅ Requirements
