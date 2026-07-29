@@ -48,7 +48,8 @@ export function buildRemoteCommand(opts: RemoteCommandOptions): string {
   return [
     // No zsh over there? Don't strand the user in a broken login.
     `if ! command -v zsh >/dev/null 2>&1; then`,
-    `  echo "shellwise: zsh not found on this host — starting your normal shell" >&2;`,
+    `  echo "shellwise: zsh not found on this host — starting your normal shell." >&2;`,
+    `  echo "shellwise: suggestions need zsh there; install zsh on the host to enable them." >&2;`,
     `  rm -f ${sock};`,
     `  exec "\${SHELL:-/bin/sh}" -l;`,
     `fi;`,

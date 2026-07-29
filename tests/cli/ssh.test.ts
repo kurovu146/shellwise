@@ -93,6 +93,37 @@ describe("buildRemoteCommand — executed for real", () => {
     expect(out).toContain("SHIPPED-CONFIG-LOADED");
   });
 
+  test("drops into the host's own shell when zsh is missing", async () => {
+    // A clean Ubuntu/Debian server has bash and dash but no zsh, so this is a
+    // common path, not an edge case.
+    const stubDir = `/tmp/sw-test-nozsh-${process.pid}`;
+    Bun.spawnSync(["mkdir", "-p", stubDir]);
+    for (const tool of ["mktemp", "base64", "rm", "sh", "openssl"]) {
+      const real = Bun.spawnSync(["sh", "-c", `command -v ${tool}`]).stdout.toString().trim();
+      if (real) Bun.spawnSync(["ln", "-sf", real, `${stubDir}/${tool}`]);
+    }
+    const sock = `/tmp/sw-test-nozsh-${process.pid}.sock`;
+
+    const proc = Bun.spawn(["sh", "-c", buildRemoteCommand({ zshrc: "# unused", socketPath: sock })], {
+      env: { PATH: stubDir, SHELL: "/bin/sh", HOME: process.env.HOME ?? "/tmp" },
+      stdin: new Blob(["echo LANDED-IN=$0\n"]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exitCode = await proc.exited;
+    Bun.spawnSync(["rm", "-rf", stubDir]);
+
+    expect(err).toContain("zsh not found");
+    // Tell the user how to get suggestions, not just that they don't have them.
+    expect(err).toContain("install zsh");
+    expect(out).toContain("LANDED-IN=/bin/sh");
+    expect(exitCode).toBe(0);
+  });
+
   test.if(zshAvailable)("falls back to a normal shell when no decoder works", async () => {
     // Shadow every decoder with a failing stub, the way a stripped-down host
     // without base64 or openssl would behave.
