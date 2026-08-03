@@ -21,7 +21,7 @@ forking while you type.
 ---
 
 <div align="center">
-  <img src="assets/demo.gif" alt="shellwise demo — a ranked dropdown appears under the prompt as you type, then Ctrl+R fuzzy search" width="800">
+  <img src="assets/demo.gif" alt="shellwise demo — a framed dropdown appears under the prompt as you type, each row tagged history or common, then Ctrl+R fuzzy search" width="800">
   <br>
   <sub>Tab/⇧Tab fill the line · → accept inline · Enter run · Esc dismiss — ranked by <b>frecency</b>: how often × how recently you run it</sub>
 </div>
@@ -30,10 +30,22 @@ forking while you type.
 > `Tab` — then the line shows exactly the command that will run, and one more `Tab`
 > past the end brings back what you typed.
 
+Every row says where it came from, so you always know whether you are about to
+re-run something of your own or reach for a command shellwise ships with:
+
+```text
+❯ docker comp
+  ╭────────────────────────────────────────────────────────╮
+  │ › docker compose up -d                         history │  ← yours, ranked by frecency
+  │   docker compose logs -f daemon                history │
+  │   docker compose down                           common │  ← built-in, no history needed
+  ╰────────────────────────────────────────────────────────╯
+```
+
 ## Why shellwise?
 
 - 🧠 **Suggestions that learn you** — your real history, ranked by **frecency** (frequency × recency), so the commands you actually use float to the top and stale ones fade.
-- ⚡ **Instant, zero-fork** — a persistent daemon answers every keystroke in ~1–3 ms over a Unix socket. No subprocess is ever spawned while you type.
+- ⚡ **Instant** — a persistent daemon answers every keystroke in ~1–3 ms over a Unix socket. In zsh nothing is ever forked while you type; fish costs one tiny `nc` per keystroke, still under 5 ms.
 - ⌨️ **No `Ctrl+R` required** — see matches inline as you type. (`Ctrl+R` is still there for full-screen fuzzy search when you want it.)
 - 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket. Nothing leaves your computer.
 - 📦 **Zero config** — one install, shell integration auto-injected, done.
@@ -61,8 +73,8 @@ no context switch — that's shellwise.
 | | |
 |---|---|
 | **Auto-save** | Commands recorded automatically after a successful run (exit code 0). |
-| **Inline auto-suggest** | A framed dropdown appears as you type — no keybind needed, every row tagged `history` or `common`. *(zsh)* |
-| **Fuzzy search** | `Ctrl+R` opens a full interactive search with real-time filtering. *(zsh + bash)* |
+| **Inline auto-suggest** | A framed dropdown appears as you type — no keybind needed, every row tagged `history` or `common`. *(zsh + fish)* |
+| **Fuzzy search** | `Ctrl+R` opens a full interactive search with real-time filtering. *(all three shells)* |
 | **Frecency ranking** | Frequency × recency, computed at query time — recent commands rank higher and decay naturally. |
 | **Common commands** | Suggests popular commands (`git`, `npm`, `docker`, …) even with empty history. |
 | **Daemon mode** | Persistent background process keeps suggest latency at ~1–3 ms, idles out after 30 min. |
@@ -189,18 +201,18 @@ sw prune --days 90 # drop everything older than 90 days
 ## 🧠 How it works
 
 ```text
-┌──────────────┐   Unix socket · ~1–3 ms   ┌────────────────────┐
-│  Zsh / Bash  │ ◄═══════════════════════► │ shellwise daemon   │
-└──────────────┘                           └──────────┬─────────┘
-                                                      │
-                                           ┌──────────▼─────────┐
-                                           │  SQLite (WAL)      │
-                                           │  history.db        │
-                                           └────────────────────┘
+┌────────────────────┐   Unix socket · ~1–3 ms   ┌───────────────────┐
+│ Zsh · Bash · Fish  │ ◄═══════════════════════► │ shellwise daemon  │
+└────────────────────┘                           └─────────┬─────────┘
+                                                           │
+                                                 ┌─────────▼─────────┐
+                                                 │  SQLite (WAL)     │
+                                                 │  history.db       │
+                                                 └───────────────────┘
 ```
 
-- **Shell hooks** (`preexec`/`precmd`) capture each command after it runs.
-- A **persistent Unix-socket connection** is opened once at shell init and reused for every keystroke — zero forks while typing.
+- **Shell hooks** (`preexec`/`precmd`, `fish_postexec`) capture each command after it runs.
+- A **persistent Unix-socket connection** is opened once at shell init and reused for every keystroke — zero forks while typing. *(zsh; fish has no socket builtin, so it spends one `nc` per keystroke — about 4.5 ms.)*
 - The daemon pre-warms **prepared SQLite statements** for instant lookups.
 - **Frecency** = `frequency × recency_weight`, evaluated *at query time* so recency keeps decaying without any background job.
 - The daemon **idles out after 30 min** and the shell **reconnects on demand**.
