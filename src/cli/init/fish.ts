@@ -277,8 +277,8 @@ function __sw_forward
         set -l idx \$__sw_selected
         test \$idx -lt 0; and set idx 0
         set -l picked \$__sw_suggestions[(math \$idx + 1)]
-        __sw_reset
         __sw_clear
+        __sw_reset
         commandline -r -- \$picked
     else
         commandline -f forward-char
@@ -288,22 +288,22 @@ end
 function __sw_dismiss
     if test (count \$__sw_suggestions) -gt 0
         # Close the frame, keep whatever Tab filled in.
-        __sw_reset
         __sw_clear
+        __sw_reset
     else
         commandline -f cancel-commandline
     end
 end
 
 function __sw_execute
-    __sw_reset
     __sw_clear
+    __sw_reset
     commandline -f execute
 end
 
 function __sw_search
-    __sw_reset
     __sw_clear
+    __sw_reset
     set -l picked (command ${bin} search --query (commandline) </dev/tty 2>/dev/tty)
     if test -n "\$picked"
         commandline -r -- \$picked
