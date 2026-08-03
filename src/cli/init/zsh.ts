@@ -80,6 +80,12 @@ __sw_search_widget() {
 }
 `;
 
+  // How long to wait for the daemon's reply. A local socket answers in 1–3 ms,
+  // so 200 ms means "something is wrong". Over `sw ssh` the reply crosses the
+  // network twice — a VPS a continent away measured 246 ms round trip — and a
+  // 200 ms limit made every single keystroke time out and reconnect.
+  const readTimeout = remote ? "1.0" : "0.2";
+
   const searchRegistration = remote ? "" : `zle -N __sw_search_widget\n`;
   const searchBinding = remote ? "" : `bindkey '^R' __sw_search_widget\n`;
 
@@ -157,7 +163,7 @@ __sw_query() {
   # response (slow/dead daemon) — reconnect to drain leftover bytes so the
   # next query cannot read a stale response (protocol desync).
   local __sw_line __sw_got=0
-  while IFS= read -r -t 0.2 -u \$__sw_fd __sw_line 2>/dev/null; do
+  while IFS= read -r -t ${readTimeout} -u \$__sw_fd __sw_line 2>/dev/null; do
     [[ -z "\$__sw_line" ]] && { __sw_got=1; break }
     __sw_tcp_result+=("\$__sw_line")
   done

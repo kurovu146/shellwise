@@ -5,14 +5,18 @@
  * which blocks the event loop, so a listener living in the test process would
  * never get a chance to answer and every request would time out.
  *
- * Usage: bun fake-daemon.ts <socket> <request-log> <base64-reply>
+ * Usage: bun fake-daemon.ts <socket> <request-log> <base64-reply> [delay-ms]
  * Each request line is appended to the log as JSON, so tabs survive.
+ *
+ * `delay-ms` stands in for network latency: an ssh-forwarded socket answers a
+ * whole round trip later than a local one.
  */
 import { appendFileSync } from "fs";
 import type { Socket } from "bun";
 
-const [socketPath, logPath, replyB64] = process.argv.slice(2);
+const [socketPath, logPath, replyB64, delayArg] = process.argv.slice(2);
 const reply = Buffer.from(replyB64, "base64").toString();
+const delayMs = Number(delayArg ?? 0);
 
 Bun.listen({
   unix: socketPath,
@@ -21,7 +25,15 @@ Bun.listen({
       for (const line of data.toString().split("\n")) {
         if (!line.trim()) continue;
         appendFileSync(logPath, JSON.stringify(line) + "\n");
-        socket.write(reply);
+        if (delayMs > 0) {
+          setTimeout(() => {
+            try {
+              socket.write(reply);
+            } catch {}
+          }, delayMs);
+        } else {
+          socket.write(reply);
+        }
       }
     },
   },
