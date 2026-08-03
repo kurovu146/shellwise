@@ -23,11 +23,12 @@ forking while you type.
 <div align="center">
   <img src="assets/demo.gif" alt="shellwise demo — a ranked dropdown appears under the prompt as you type, then Ctrl+R fuzzy search" width="800">
   <br>
-  <sub>Tab/⇧Tab navigate · → accept inline · Enter run · Esc dismiss — ranked by <b>frecency</b>: how often × how recently you run it</sub>
+  <sub>Tab/⇧Tab fill the line · → accept inline · Enter run · Esc dismiss — ranked by <b>frecency</b>: how often × how recently you run it</sub>
 </div>
 
-> **Enter always runs what *you* typed.** Suggestions never hijack your command —
-> press `Tab` to step into the list only when you actually want one.
+> **Enter always runs what the line shows.** Nothing is filled in until you press
+> `Tab` — then the line shows exactly the command that will run, and one more `Tab`
+> past the end brings back what you typed.
 
 ## Why shellwise?
 
@@ -60,7 +61,7 @@ no context switch — that's shellwise.
 | | |
 |---|---|
 | **Auto-save** | Commands recorded automatically after a successful run (exit code 0). |
-| **Inline auto-suggest** | Dropdown appears as you type — no keybind needed. *(zsh)* |
+| **Inline auto-suggest** | A framed dropdown appears as you type — no keybind needed, every row tagged `history` or `common`. *(zsh)* |
 | **Fuzzy search** | `Ctrl+R` opens a full interactive search with real-time filtering. *(zsh + bash)* |
 | **Frecency ranking** | Frequency × recency, computed at query time — recent commands rank higher and decay naturally. |
 | **Common commands** | Suggests popular commands (`git`, `npm`, `docker`, …) even with empty history. |
@@ -109,11 +110,11 @@ Just start typing. After 2+ characters, suggestions from your history appear inl
 
 | Key | Action |
 |-----|--------|
-| `Enter` | **Run the command you typed** (or the highlighted suggestion, if you navigated into the list) |
-| `Tab` | Step into the list / next suggestion |
+| `Enter` | **Run exactly what the line shows** |
+| `Tab` | Next suggestion — fills it into the line (past the last one, back to what you typed) |
 | `Shift+Tab` | Previous suggestion |
-| `→` Right arrow | Accept the top suggestion inline (fills the line — doesn't run it) |
-| `Esc` | Dismiss suggestions |
+| `→` Right arrow | Accept the highlighted suggestion and close the list (doesn't run it) |
+| `Esc` | Close the list, keep the command on the line |
 
 ### Interactive search *(`Ctrl+R`)*
 
