@@ -42,7 +42,9 @@ describe("generateZshScript — remote mode", () => {
   });
 
   test("still renders the inline dropdown", () => {
-    expect(script).toContain("__sw_query SUGGEST");
+    // The request goes out through the async channel, not the blocking query.
+    expect(script).toContain("__sw_sconnect");
+    expect(script).toContain("SUGGEST");
     expect(script).toContain("bindkey '\\t' __sw_next");
   });
 });

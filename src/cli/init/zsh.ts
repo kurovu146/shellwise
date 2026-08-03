@@ -172,6 +172,84 @@ __sw_query() {
   [[ \${#__sw_tcp_result} -gt 0 ]]
 }
 
+# ─── Async suggest channel ─────────────────────────────────
+# Typing must never wait for the network. The request is written and the widget
+# returns at once; zsh calls __sw_on_reply when an answer shows up, and only
+# then is the frame drawn. Over a local socket the reply is back before the next
+# keypress; over \`sw ssh\` it is a round trip late, and that is fine — what must
+# not happen is the keystroke itself waiting for it.
+#
+# A second connection, separate from the one ADD uses: the reply to an ADD would
+# otherwise be swallowed by this handler.
+
+typeset -g __sw_sfd=""
+typeset -g __sw_srbuf=""
+typeset -ga __sw_squeue=()
+
+__sw_sconnect() {
+  if [[ -n "\$__sw_sfd" ]]; then
+    zle -F \$__sw_sfd 2>/dev/null
+    zsocket -c \$__sw_sfd 2>/dev/null
+    __sw_sfd=""
+  fi
+  __sw_srbuf=""
+  __sw_squeue=()
+  [[ -S "\$__sw_sock" ]] || return 1
+  zsocket "\$__sw_sock" 2>/dev/null || return 1
+  __sw_sfd=\$REPLY
+  zle -F \$__sw_sfd __sw_on_reply
+}
+
+# Turn the accumulated reply into the two parallel arrays the frame reads.
+__sw_parse_reply() {
+  __sw_suggestions=()
+  __sw_sources=()
+  local __sw_line
+  for __sw_line in "\${(@f)__sw_srbuf}"; do
+    [[ -n "\$__sw_line" ]] || continue
+    if [[ "\$__sw_line" == *\$'\\t'* ]]; then
+      __sw_sources+=("\${__sw_line%%\$'\\t'*}")
+      __sw_suggestions+=("\${__sw_line#*\$'\\t'}")
+    else
+      # Daemon predates v2: render the row without a tag.
+      __sw_sources+=("")
+      __sw_suggestions+=("\$__sw_line")
+    fi
+  done
+}
+
+# An fd handler is not a widget: it can read and set variables, but \$BUFFER and
+# the display belong to widgets only. So the handler just stashes the answer and
+# hands off — the widget is where it can be compared against the current line.
+typeset -g __sw_reply_for=""
+typeset -g __sw_reply_raw=""
+
+__sw_async_render() {
+  # An answer for a line the user has already typed past is worthless, and
+  # drawing it would show suggestions that do not match what is on screen.
+  [[ "\$__sw_reply_for" == "\$BUFFER" ]] || return
+  __sw_srbuf="\$__sw_reply_raw"
+  __sw_parse_reply
+  __sw_render
+  zle -R
+}
+zle -N __sw_async_render
+
+__sw_on_reply() {
+  local __sw_line
+  while IFS= read -r -t 0 -u \$__sw_sfd __sw_line 2>/dev/null; do
+    if [[ -z "\$__sw_line" ]]; then
+      __sw_reply_for="\${__sw_squeue[1]}"
+      [[ \${#__sw_squeue} -gt 0 ]] && shift __sw_squeue
+      __sw_reply_raw="\$__sw_srbuf"
+      __sw_srbuf=""
+      zle __sw_async_render
+      continue
+    fi
+    __sw_srbuf+="\$__sw_line"\$'\\n'
+  done
+}
+
 # ─── Command Capture (auto-save) ───────────────────────────
 
 __sw_preexec() {
@@ -337,6 +415,9 @@ __sw_suggest() {
   region_highlight=()
 
   [[ \${#BUFFER} -lt 2 ]] && return
+  # Nothing useful to rank in a wall of text, and it would be a big line to push
+  # over a forwarded socket on every keystroke.
+  [[ \${#BUFFER} -gt 200 ]] && return
 
   # More keys are already waiting in the input buffer, so this line is not what
   # the user will end up with. Asking now would waste the query and — over a
@@ -344,23 +425,20 @@ __sw_suggest() {
   # keystroke behind it. Let the last key of the burst do the asking.
   [[ \${PENDING:-0} -gt 0 ]] && return
 
-  # Socket query only — no fallback, never spawn process during typing.
-  # "v2" asks the daemon to say where each suggestion came from.
-  __sw_query SUGGEST "\$BUFFER" 5 v2 || return
+  # Fire and forget: the answer arrives through __sw_on_reply. "v2" asks the
+  # daemon to say where each suggestion came from.
+  [[ -n "\$__sw_sfd" ]] || { __sw_sconnect || return }
 
-  local __sw_line
-  for __sw_line in "\${__sw_tcp_result[@]}"; do
-    if [[ "\$__sw_line" == *\$'\\t'* ]]; then
-      __sw_sources+=("\${__sw_line%%\$'\\t'*}")
-      __sw_suggestions+=("\${__sw_line#*\$'\\t'}")
-    else
-      # Daemon predates v2: render the row without a tag.
-      __sw_sources+=("")
-      __sw_suggestions+=("\$__sw_line")
-    fi
-  done
+  # Writing to a daemon that has idle-exited must return an error, never raise
+  # a signal that freezes the line editor.
+  setopt local_options local_traps
+  trap '' PIPE
 
-  __sw_render
+  local __sw_req="SUGGEST"\$'\\t'"\${BUFFER//[\$'\\t\\n']/ }"\$'\\t'"5"\$'\\t'"v2"
+  if ! print -ru \$__sw_sfd -- "\$__sw_req" 2>/dev/null; then
+    __sw_sconnect && print -ru \$__sw_sfd -- "\$__sw_req" 2>/dev/null || return 1
+  fi
+  __sw_squeue+=("\$BUFFER")
 }
 
 # ─── Widget wrappers (trigger suggest on keystroke) ────────
@@ -488,5 +566,9 @@ bindkey '^M' __sw_accept_line
 bindkey '^[' __sw_dismiss
 bindkey '^[[C' __sw_forward_char
 bindkey '^[OC' __sw_forward_char
+
+# Open the async suggest channel last: it registers an fd handler, so every
+# function it reaches for has to exist by now.
+__sw_sconnect
 `;
 }

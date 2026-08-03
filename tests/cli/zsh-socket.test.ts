@@ -1,9 +1,9 @@
 /**
- * End-to-end over a real socket: the generated zsh integration talks to a
- * stand-in daemon, so the v2 handshake and the tab-splitting are exercised for
- * real rather than assumed. Remote mode reads its socket path from
- * SHELLWISE_SOCKET, which is what lets this run without touching the user's own
- * daemon.
+ * The suggest path is asynchronous: the widget writes the request and returns,
+ * and `zle -F` delivers the answer later. Outside a real line editor there is
+ * no ZLE to run that handler, so these tests cover the two halves separately —
+ * what goes out on the socket, and how a reply is turned into the two arrays.
+ * The round trip as a whole is covered in zsh-async-suggest.test.ts, under tmux.
  */
 import { describe, test, expect, afterEach } from "bun:test";
 import { hasZsh, runZshProbe } from "./zsh-harness";
@@ -13,7 +13,6 @@ import { join } from "path";
 import type { Subprocess } from "bun";
 
 const zsh = hasZsh();
-
 let daemonProc: Subprocess | null = null;
 
 afterEach(() => {
@@ -21,14 +20,8 @@ afterEach(() => {
   daemonProc = null;
 });
 
-interface FakeDaemon {
-  socket: string;
-  /** Every request line the daemon received, tabs intact. */
-  requests(): string[];
-}
-
-function startFakeDaemon(reply: string): FakeDaemon {
-  const dir = mkdtempSync(join(tmpdir(), "sw-sock-"));
+function startFakeDaemon(reply: string): { socket: string; requests(): string[] } {
+  const dir = mkdtempSync(join(tmpdir(), "sw-fsock-"));
   const socket = join(dir, "d.sock");
   const log = join(dir, "requests.log");
 
@@ -56,92 +49,78 @@ function startFakeDaemon(reply: string): FakeDaemon {
   };
 }
 
-describe.skipIf(!zsh)("__sw_suggest over the socket", () => {
-  test("asks the daemon for tagged lines and splits them into two arrays", () => {
-    const daemon = startFakeDaemon("history\tgit status\ncommon\tgit stash\n\n");
-
+describe.skipIf(!zsh)("what __sw_suggest sends", () => {
+  test("asks for tagged lines and returns without waiting", () => {
+    const daemon = startFakeDaemon("history\tgit status\n\n");
     const out = runZshProbe(
       `
       BUFFER="git st"
-      COLUMNS=60
       __sw_suggest
-      print -r -- "n:\${#__sw_suggestions}"
-      print -r -- "c1:\${__sw_suggestions[1]}"
-      print -r -- "s1:\${__sw_sources[1]}"
-      print -r -- "c2:\${__sw_suggestions[2]}"
-      print -r -- "s2:\${__sw_sources[2]}"
-      print -r -- "orig:\$__sw_original"
-      print -r -- "$POSTDISPLAY"
+      print "orig:$__sw_original"
+      print "queued:$__sw_squeue[1]"
+      print "returned"
     `,
       { SHELLWISE_SOCKET: daemon.socket }
     );
 
     expect(out.stderr).toBe("");
     expect(daemon.requests()).toEqual(["SUGGEST\tgit st\t5\tv2"]);
-    expect(out.stdout).toContain("n:2");
-    expect(out.stdout).toContain("c1:git status");
-    expect(out.stdout).toContain("s1:history");
-    expect(out.stdout).toContain("c2:git stash");
-    expect(out.stdout).toContain("s2:common");
     expect(out.stdout).toContain("orig:git st");
-    expect(out.stdout).toContain("history │");
-    expect(out.stdout).toContain("common │");
+    // The line it asked about is remembered, so a late reply can be matched.
+    expect(out.stdout).toContain("queued:git st");
+    expect(out.stdout).toContain("returned");
+  });
+
+  test("a buffer shorter than two characters never hits the daemon", () => {
+    const daemon = startFakeDaemon("history\tgit status\n\n");
+    runZshProbe(`BUFFER="g"; __sw_suggest`, { SHELLWISE_SOCKET: daemon.socket });
+    expect(daemon.requests()).toEqual([]);
+  });
+
+  test("a pasted wall of text never hits the daemon", () => {
+    const daemon = startFakeDaemon("history\tgit status\n\n");
+    runZshProbe(`BUFFER="${"x".repeat(250)}"; __sw_suggest`, {
+      SHELLWISE_SOCKET: daemon.socket,
+    });
+    expect(daemon.requests()).toEqual([]);
+  });
+});
+
+describe.skipIf(!zsh)("__sw_parse_reply", () => {
+  test("splits a v2 reply into commands and their sources", () => {
+    const out = runZshProbe(`
+      __sw_srbuf=$'history\\tgit status\\ncommon\\tgit stash\\n'
+      __sw_parse_reply
+      print "n:\${#__sw_suggestions}"
+      print "c1:$__sw_suggestions[1] s1:$__sw_sources[1]"
+      print "c2:$__sw_suggestions[2] s2:$__sw_sources[2]"
+    `);
+    expect(out.stdout).toContain("n:2");
+    expect(out.stdout).toContain("c1:git status s1:history");
+    expect(out.stdout).toContain("c2:git stash s2:common");
   });
 
   test("a daemon that predates v2 still fills the list, just without tags", () => {
-    const daemon = startFakeDaemon("git status\ngit stash\n\n");
-
-    const out = runZshProbe(
-      `
-      BUFFER="git st"
-      COLUMNS=60
-      __sw_suggest
-      print -r -- "n:\${#__sw_suggestions}"
-      print -r -- "c1:\${__sw_suggestions[1]}"
-      print -r -- "s1:[\${__sw_sources[1]}]"
-      print -r -- "$POSTDISPLAY"
-    `,
-      { SHELLWISE_SOCKET: daemon.socket }
-    );
-
-    expect(out.stderr).toBe("");
+    const out = runZshProbe(`
+      __sw_srbuf=$'git status\\ngit stash\\n'
+      __sw_parse_reply
+      print "n:\${#__sw_suggestions}"
+      print "c1:$__sw_suggestions[1]"
+      print "s1:[$__sw_sources[1]]"
+    `);
     expect(out.stdout).toContain("n:2");
     expect(out.stdout).toContain("c1:git status");
     expect(out.stdout).toContain("s1:[]");
-    expect(out.stdout).not.toContain("history");
   });
 
   test("a command containing a tab survives the split intact", () => {
-    const daemon = startFakeDaemon("history\techo a\tb\n\n");
-
-    const out = runZshProbe(
-      `
-      BUFFER="ec"
-      __sw_suggest
-      print -r -- "s1:\${__sw_sources[1]}"
-      print -r -- "c1:[\${__sw_suggestions[1]}]"
-    `,
-      { SHELLWISE_SOCKET: daemon.socket }
-    );
-
+    const out = runZshProbe(`
+      __sw_srbuf=$'history\\techo a\\tb\\n'
+      __sw_parse_reply
+      print "s1:$__sw_sources[1]"
+      print "c1:[$__sw_suggestions[1]]"
+    `);
     expect(out.stdout).toContain("s1:history");
     expect(out.stdout).toContain("c1:[echo a\tb]");
-  });
-
-  test("Tab then Enter runs the command the daemon sent", () => {
-    const daemon = startFakeDaemon("history\tgit status\ncommon\tgit stash\n\n");
-
-    const out = runZshProbe(
-      `
-      BUFFER="git st"
-      __sw_suggest
-      __sw_next
-      __sw_accept_line
-      print -r -- "buf:\$BUFFER"
-    `,
-      { SHELLWISE_SOCKET: daemon.socket }
-    );
-
-    expect(out.stdout).toContain("buf:git status");
   });
 });
