@@ -235,5 +235,119 @@ function __sw_box_lines --argument-names cols
 
     echo (set_color 585858)"  ╰\$bar╯"(set_color normal)
 end
+
+# ─── Widgets ───────────────────────────────────────────────
+
+function __sw_insert --argument-names c
+    commandline -i -- \$c
+    __sw_suggest (commandline)
+    __sw_draw
+end
+
+function __sw_backspace
+    commandline -f backward-delete-char
+    __sw_suggest (commandline)
+    __sw_draw
+end
+
+# Tab / Shift+Tab write the highlighted command straight into the line, so
+# what you see is what Enter runs.
+function __sw_accept
+    if test (count \$__sw_suggestions) -eq 0
+        commandline -f complete
+        return
+    end
+    __sw_cycle next
+    commandline -r -- (__sw_selection_text)
+    __sw_draw
+end
+
+function __sw_accept_prev
+    if test (count \$__sw_suggestions) -eq 0
+        commandline -f complete-and-search
+        return
+    end
+    __sw_cycle prev
+    commandline -r -- (__sw_selection_text)
+    __sw_draw
+end
+
+function __sw_forward
+    if test (count \$__sw_suggestions) -gt 0
+        set -l idx \$__sw_selected
+        test \$idx -lt 0; and set idx 0
+        set -l picked \$__sw_suggestions[(math \$idx + 1)]
+        __sw_reset
+        __sw_clear
+        commandline -r -- \$picked
+    else
+        commandline -f forward-char
+    end
+end
+
+function __sw_dismiss
+    if test (count \$__sw_suggestions) -gt 0
+        # Close the frame, keep whatever Tab filled in.
+        __sw_reset
+        __sw_clear
+    else
+        commandline -f cancel-commandline
+    end
+end
+
+function __sw_execute
+    __sw_reset
+    __sw_clear
+    commandline -f execute
+end
+
+function __sw_search
+    __sw_reset
+    __sw_clear
+    set -l picked (command ${bin} search --query (commandline) </dev/tty 2>/dev/tty)
+    if test -n "\$picked"
+        commandline -r -- \$picked
+    end
+    commandline -f repaint
+end
+
+# ─── Auto-save ─────────────────────────────────────────────
+# fish_postexec hands us the command line, and \$CMD_DURATION is already in ms.
+
+function __sw_postexec --on-event fish_postexec
+    set -l st \$status
+    test -n "\$argv[1]"; or return
+    __sw_clear
+    __sw_send (printf 'ADD\\t%s\\t%s\\t%s\\t%s\\t%s\\tfish' \$argv[1] \$PWD \$st \$CMD_DURATION \$SW_SESSION_ID) >/dev/null
+    or command ${bin} add --command "\$argv[1]" --cwd "\$PWD" --exit-code \$st --duration \$CMD_DURATION --session "\$SW_SESSION_ID" --shell fish &>/dev/null &
+end
+
+# ─── Bindings + first-run notice ───────────────────────────
+# Same guard as the daemon block above: sourcing this file in a test must not
+# rebind the keyboard.
+
+if status is-interactive
+    if test \$__sw_transport = none
+        set -l dir (test -n "\$XDG_DATA_HOME"; and echo \$XDG_DATA_HOME/shellwise; or echo \$HOME/.local/share/shellwise)
+        if not test -f \$dir/fish-no-transport-warned
+            mkdir -p \$dir 2>/dev/null
+            touch \$dir/fish-no-transport-warned 2>/dev/null
+            echo "shellwise: cài netcat (nc) để bật dropdown gợi ý — Ctrl+R vẫn dùng được"
+        end
+    end
+
+    for c in (string split '' 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_./~=:@%+,')
+        bind -- \$c "__sw_insert '\$c'"
+    end
+    bind \\x7f __sw_backspace
+    bind \\b __sw_backspace
+    bind \\t __sw_accept
+    bind \\e\\[Z __sw_accept_prev
+    bind \\e\\[C __sw_forward
+    bind \\eOC __sw_forward
+    bind \\e __sw_dismiss
+    bind \\r __sw_execute
+    bind \\cr __sw_search
+end
 `;
 }
