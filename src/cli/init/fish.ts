@@ -30,6 +30,70 @@ if status is-interactive
     end
 end
 
+# ─── Transport ─────────────────────────────────────────────
+# fish has no socket builtin, so every query goes through one external
+# process. nc costs ~4.5ms — the only option fast enough to run on each
+# keystroke. Probe once at startup, never per query.
+
+if command -q nc
+    set -g __sw_transport nc
+else if command -q socat
+    set -g __sw_transport socat
+else
+    set -g __sw_transport none
+end
+
+# Send one protocol line, print the reply. Returns 1 when there is no
+# transport, so callers can bail without printing anything.
+function __sw_send --argument-names msg
+    switch \$__sw_transport
+        case nc
+            printf '%s\\n' \$msg | command nc -U \$__sw_sock 2>/dev/null
+        case socat
+            printf '%s\\n' \$msg | command socat - UNIX-CONNECT:\$__sw_sock 2>/dev/null
+        case '*'
+            return 1
+    end
+end
+
+# ─── Suggest ───────────────────────────────────────────────
+
+function __sw_suggest --argument-names buf
+    set -g __sw_suggestions
+    set -g __sw_sources
+    set -g __sw_selected -1
+    set -g __sw_original \$buf
+
+    # Under two characters there is nothing worth ranking. Over 200 means a
+    # terminal pushed raw text at us character by character (real pastes use
+    # bracketed paste and never reach here) — querying per character would
+    # stall the shell.
+    set -l len (string length -- \$buf)
+    test \$len -ge 2; or return
+    test \$len -le 200; or return
+
+    # Built with printf, not a quoted string: fish leaves \\t alone inside
+    # quotes, which would send a literal backslash-t and desync the protocol.
+    set -l reply (__sw_send (printf 'SUGGEST\\t%s\\t5\\tv2' \$buf))
+    or return
+
+    for line in \$reply
+        test -n "\$line"; or continue
+        # Source comes first, split on the first tab only, so a tab inside the
+        # command keeps the rest of the line intact. Note \\t only means a tab
+        # when unquoted — fish does not expand it inside quotes.
+        set -l parts (string split -m1 \\t -- \$line)
+        if test (count \$parts) -eq 2
+            set -a __sw_sources \$parts[1]
+            set -a __sw_suggestions \$parts[2]
+        else
+            # Daemon predates v2: render the row without a tag.
+            set -a __sw_sources ""
+            set -a __sw_suggestions \$line
+        end
+    end
+end
+
 # ─── Frame ─────────────────────────────────────────────────
 # Prints the frame to stdout. Touches neither the cursor nor \`commandline\`,
 # so it can be called outside an interactive session — that is what makes it
