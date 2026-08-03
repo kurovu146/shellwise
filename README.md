@@ -5,13 +5,13 @@
 ### Your shell history, but smart.
 
 Inline auto-suggest, fuzzy search, and **frecency** ranking for your terminal —
-backed by a tiny background daemon so suggestions appear in **~1–3 ms** without ever
-forking while you type.
+backed by a tiny background daemon that answers in **~1–3 ms**, so suggestions keep up
+with your typing instead of the other way around.
 
 [![npm version](https://img.shields.io/npm/v/shellwise?style=flat-square&color=3fb950&label=npm)](https://www.npmjs.com/package/shellwise)
 [![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)](LICENSE)
 [![Runtime](https://img.shields.io/badge/runtime-Bun-000000?style=flat-square&logo=bun&logoColor=white)](https://bun.sh)
-[![Shell](https://img.shields.io/badge/shell-zsh%20%7C%20bash-89e051?style=flat-square)](#-requirements)
+[![Shell](https://img.shields.io/badge/shell-zsh%20%7C%20fish%20%7C%20bash-89e051?style=flat-square)](#-requirements)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-8b949e?style=flat-square)](#-requirements)
 
 [Install](#-install) · [Features](#-features) · [Usage](#-usage) · [How it works](#-how-it-works)
@@ -164,6 +164,11 @@ proxy is **read-only**: it answers `SUGGEST`, and silently drops `ADD` and
 `STOP`. So a compromised host can neither plant a command in your history nor
 stop your daemon. Pass `--save-history` if you do want remote commands recorded.
 
+Every keystroke's answer crosses the network twice, so on a distant host the
+dropdown lands a round trip late — around 250 ms for a VPS on another continent.
+**Your typing is not held up by it:** the request is sent and the line editor
+carries on, and the frame is drawn whenever the reply arrives.
+
 Needs zsh on the remote host (`Ctrl+R` search stays the host's own — the TUI
 needs the binary). No zsh over there, or forwarding blocked? You get a normal
 shell instead of a broken one.
@@ -254,11 +259,13 @@ npm install -g shellwise@latest
 brew uninstall shellwise      # or: bun remove -g shellwise / npm uninstall -g shellwise
 ```
 
-Shell integration is removed automatically. If a stray line remains, delete it from your `~/.zshrc` / `~/.bashrc`:
+Shell integration is removed automatically. If a stray line remains, delete it from
+your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`:
 
 ```bash
 # shellwise shell integration
-eval "$(shellwise init zsh)"
+eval "$(shellwise init zsh)"      # zsh / bash
+shellwise init fish | source      # fish
 ```
 
 Remove all stored data:
