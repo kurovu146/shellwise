@@ -3,7 +3,7 @@ import { insertCommand } from "../db/queries";
 import { getHostname } from "../utils/platform";
 import { getCommonSuggestions } from "../data/common-commands";
 import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
-import { parseRequest, getSocketPath, getPidPath } from "./protocol";
+import { parseRequest, getSocketPath, getPidPath, formatSuggestResponse } from "./protocol";
 import { FRECENCY_EXPR } from "../db/frecency";
 import { unlinkSync, writeFileSync, existsSync, chmodSync } from "fs";
 import type { Socket } from "bun";
@@ -20,7 +20,7 @@ let updateNotified = false;
 let suggestPrefix: ReturnType<ReturnType<typeof getDb>["prepare"]>;
 let suggestContains: ReturnType<ReturnType<typeof getDb>["prepare"]>;
 
-function initPreparedStatements() {
+export function initPreparedStatements() {
   const db = getDb();
   suggestPrefix = db.prepare(
     `SELECT command FROM command_stats
@@ -43,7 +43,7 @@ function resetIdleTimer() {
   }, IDLE_TIMEOUT);
 }
 
-function handleRequest(raw: string): string {
+export function handleRequest(raw: string): string {
   const req = parseRequest(raw);
   if (!req) return "\n";
 
@@ -93,10 +93,15 @@ function handleRequest(raw: string): string {
         .filter((cmd) => !seen.has(cmd))
         .slice(0, 5);
 
-      // Merge: history first, then common
-      const merged = [...historyResults, ...commonResults];
-
-      return merged.length > 0 ? merged.join("\n") + "\n\n" : "\n";
+      // History first, then common — each line keeps its origin so the shell
+      // can tag it.
+      return formatSuggestResponse(
+        [
+          ...historyResults.map((command) => ({ command, source: "history" as const })),
+          ...commonResults.map((command) => ({ command, source: "common" as const })),
+        ],
+        req.tagged
+      );
     }
 
     case "ADD": {
