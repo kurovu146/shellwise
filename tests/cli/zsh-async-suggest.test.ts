@@ -127,6 +127,24 @@ describe.skipIf(!zsh || !tmux)("typing against a very slow daemon", () => {
     expect(screen()).toContain("╭");
   });
 
+  test("each reply replaces the frame instead of stacking on the last one", () => {
+    // Type, pause long enough for the answer to arrive and be drawn, type
+    // again. The second frame must replace the first, not append to it.
+    startShell(200);
+
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "gi"]);
+    Bun.sleepSync(900);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "t"]);
+    Bun.sleepSync(900);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, " s"]);
+    Bun.sleepSync(1200);
+
+    const rows = screen()
+      .split("\n")
+      .filter((l) => l.includes("git status")).length;
+    expect(rows).toBe(1);
+  });
+
   test("a late reply does not overwrite what the user typed since", () => {
     startShell(700);
 

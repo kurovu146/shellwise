@@ -89,8 +89,7 @@ describe.skipIf(!zsh)("what __sw_suggest sends", () => {
 describe.skipIf(!zsh)("__sw_parse_reply", () => {
   test("splits a v2 reply into commands and their sources", () => {
     const out = runZshProbe(`
-      __sw_srbuf=$'history\\tgit status\\ncommon\\tgit stash\\n'
-      __sw_parse_reply
+      __sw_parse_reply $'history\\tgit status\\ncommon\\tgit stash\\n'
       print "n:\${#__sw_suggestions}"
       print "c1:$__sw_suggestions[1] s1:$__sw_sources[1]"
       print "c2:$__sw_suggestions[2] s2:$__sw_sources[2]"
@@ -102,8 +101,7 @@ describe.skipIf(!zsh)("__sw_parse_reply", () => {
 
   test("a daemon that predates v2 still fills the list, just without tags", () => {
     const out = runZshProbe(`
-      __sw_srbuf=$'git status\\ngit stash\\n'
-      __sw_parse_reply
+      __sw_parse_reply $'git status\\ngit stash\\n'
       print "n:\${#__sw_suggestions}"
       print "c1:$__sw_suggestions[1]"
       print "s1:[$__sw_sources[1]]"
@@ -115,8 +113,7 @@ describe.skipIf(!zsh)("__sw_parse_reply", () => {
 
   test("a command containing a tab survives the split intact", () => {
     const out = runZshProbe(`
-      __sw_srbuf=$'history\\techo a\\tb\\n'
-      __sw_parse_reply
+      __sw_parse_reply $'history\\techo a\\tb\\n'
       print "s1:$__sw_sources[1]"
       print "c1:[$__sw_suggestions[1]]"
     `);

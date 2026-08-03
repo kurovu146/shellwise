@@ -200,12 +200,16 @@ __sw_sconnect() {
   zle -F \$__sw_sfd __sw_on_reply
 }
 
-# Turn the accumulated reply into the two parallel arrays the frame reads.
+# Turn one reply into the two parallel arrays the frame reads. It takes the text
+# as an argument rather than reading __sw_srbuf: that variable is the handler's
+# read buffer, and having the widget write to it made the next chunk append to
+# the previous reply — which drew the list once per keystroke, stacked.
 __sw_parse_reply() {
+  local __sw_raw="\$1"
   __sw_suggestions=()
   __sw_sources=()
   local __sw_line
-  for __sw_line in "\${(@f)__sw_srbuf}"; do
+  for __sw_line in "\${(@f)__sw_raw}"; do
     [[ -n "\$__sw_line" ]] || continue
     if [[ "\$__sw_line" == *\$'\\t'* ]]; then
       __sw_sources+=("\${__sw_line%%\$'\\t'*}")
@@ -228,8 +232,7 @@ __sw_async_render() {
   # An answer for a line the user has already typed past is worthless, and
   # drawing it would show suggestions that do not match what is on screen.
   [[ "\$__sw_reply_for" == "\$BUFFER" ]] || return
-  __sw_srbuf="\$__sw_reply_raw"
-  __sw_parse_reply
+  __sw_parse_reply "\$__sw_reply_raw"
   __sw_render
   zle -R
 }
