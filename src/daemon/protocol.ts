@@ -10,7 +10,11 @@ export interface SuggestRequest {
   type: "SUGGEST";
   query: string;
   limit: number;
+  /** Client speaks v2: it wants `<source>\t<command>` lines back. */
+  tagged: boolean;
 }
+
+export type SuggestSource = "history" | "common";
 
 export interface AddRequest {
   type: "ADD";
@@ -35,7 +39,7 @@ export type Request = SuggestRequest | AddRequest | StopRequest | PingRequest;
 export function serializeRequest(req: Request): string {
   switch (req.type) {
     case "SUGGEST":
-      return `SUGGEST\t${req.query}\t${req.limit}\n`;
+      return `SUGGEST\t${req.query}\t${req.limit}${req.tagged ? "\tv2" : ""}\n`;
     case "ADD":
       return `ADD\t${req.command}\t${req.cwd}\t${req.exitCode}\t${req.duration}\t${req.session}\t${req.shell}\n`;
     case "STOP":
@@ -52,7 +56,14 @@ export function parseRequest(raw: string): Request | null {
 
   switch (type) {
     case "SUGGEST":
-      return { type: "SUGGEST", query: parts[1] || "", limit: parseInt(parts[2]) || 5 };
+      return {
+        type: "SUGGEST",
+        query: parts[1] || "",
+        limit: parseInt(parts[2]) || 5,
+        // A shell from an older install sends no marker at all; it must keep
+        // getting the bare-command format it knows how to parse.
+        tagged: parts[3] === "v2",
+      };
     case "ADD": {
       // Distinguish a real 0 from an unparseable/missing field (a desynced
       // line must not masquerade as a successful exit code 0).
@@ -75,6 +86,19 @@ export function parseRequest(raw: string): Request | null {
     default:
       return null;
   }
+}
+
+/**
+ * Wire format of a SUGGEST reply. The source goes *before* the command so the
+ * client can split on the first tab and keep the rest of the line verbatim.
+ */
+export function formatSuggestResponse(
+  results: { command: string; source: SuggestSource }[],
+  tagged: boolean
+): string {
+  if (results.length === 0) return "\n";
+  const lines = results.map((r) => (tagged ? `${r.source}\t${r.command}` : r.command));
+  return lines.join("\n") + "\n\n";
 }
 
 export function getSocketPath(): string {
