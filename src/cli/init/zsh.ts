@@ -338,6 +338,12 @@ __sw_suggest() {
 
   [[ \${#BUFFER} -lt 2 ]] && return
 
+  # More keys are already waiting in the input buffer, so this line is not what
+  # the user will end up with. Asking now would waste the query and — over a
+  # forwarded socket, where a reply costs a full round trip — hold up the next
+  # keystroke behind it. Let the last key of the burst do the asking.
+  [[ \${PENDING:-0} -gt 0 ]] && return
+
   # Socket query only — no fallback, never spawn process during typing.
   # "v2" asks the daemon to say where each suggestion came from.
   __sw_query SUGGEST "\$BUFFER" 5 v2 || return
