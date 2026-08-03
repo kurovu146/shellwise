@@ -25,8 +25,21 @@ export function buildRemoteZshrc(integration: string): string {
   return `# shellwise remote session (temporary — removed when you log out)
 # Restore ZDOTDIR first: the user's own config may rely on it.
 ZDOTDIR=$HOME
+
+# sshd prints the message of the day only for a login session, and we hand it a
+# command instead — so print it here, honouring ~/.hushlogin as sshd would.
+if [ ! -f "$HOME/.hushlogin" ]; then
+  [ -f /run/motd.dynamic ] && cat /run/motd.dynamic
+  [ -f /etc/motd ] && cat /etc/motd
+fi
+
+# zsh -i reads .zshrc only. Source what a login shell would, in zsh's own order,
+# or the session is missing whatever the user set up in .zprofile (PATH, above
+# all) and .zlogin.
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv"
+[ -f "$HOME/.zprofile" ] && source "$HOME/.zprofile"
 [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
+[ -f "$HOME/.zlogin" ] && source "$HOME/.zlogin"
 
 ${integration}`;
 }
