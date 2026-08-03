@@ -94,6 +94,65 @@ function __sw_suggest --argument-names buf
     end
 end
 
+# ─── Selection ─────────────────────────────────────────────
+# Index -1 means "the text you typed".
+
+function __sw_selection_text
+    if test \$__sw_selected -ge 0
+        echo \$__sw_suggestions[(math \$__sw_selected + 1)]
+    else
+        echo \$__sw_original
+    end
+end
+
+function __sw_cycle --argument-names dir
+    set -l n (count \$__sw_suggestions)
+    test \$n -gt 0; or return
+
+    if test \$dir = next
+        set -g __sw_selected (math \$__sw_selected + 1)
+        test \$__sw_selected -ge \$n; and set -g __sw_selected -1
+    else
+        set -g __sw_selected (math \$__sw_selected - 1)
+        test \$__sw_selected -lt -1; and set -g __sw_selected (math \$n - 1)
+    end
+end
+
+function __sw_reset
+    set -g __sw_suggestions
+    set -g __sw_sources
+    set -g __sw_selected -1
+    set -g __sw_drawn 0
+end
+
+# ─── Draw / clear ──────────────────────────────────────────
+# fish has no POSTDISPLAY, so the frame is written below the prompt by hand:
+# wipe from the cursor down, print the box, then walk back up and let fish
+# repaint the prompt line over what was erased.
+
+function __sw_draw
+    set -l lines (__sw_box_lines \$COLUMNS)
+    if test (count \$lines) -eq 0
+        __sw_clear
+        return
+    end
+    printf '\\e[J'
+    for l in \$lines
+        printf '\\n%s' \$l
+    end
+    printf '\\e[%dA\\r' (count \$lines)
+    set -g __sw_drawn 1
+    commandline -f repaint
+end
+
+function __sw_clear
+    if test \$__sw_drawn -eq 1
+        printf '\\e[J'
+        set -g __sw_drawn 0
+        commandline -f repaint
+    end
+end
+
 # ─── Frame ─────────────────────────────────────────────────
 # Prints the frame to stdout. Touches neither the cursor nor \`commandline\`,
 # so it can be called outside an interactive session — that is what makes it
