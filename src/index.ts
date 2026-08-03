@@ -39,9 +39,9 @@ Commands:
   suggest --query <text>      Get top suggestion (used by shell hook)
   add <cmd>                   Save a command to history
   delete <cmd>                Delete a command from history
-  init <zsh|bash>             Output shell integration script
+  init <zsh|bash|fish>        Output shell integration script
   ssh [ssh options] <host>    SSH with suggestions on the remote host
-  import [zsh|bash]           Import existing shell history
+  import [zsh|bash|fish]      Import existing shell history
   stats                       Show usage statistics
   prune --days <n>            Remove entries older than n days
   daemon start|stop|status    Manage background daemon (faster suggest)
@@ -50,6 +50,7 @@ Commands:
 Setup:
   Add to ~/.zshrc:   eval "$(shellwise init zsh)"
   Add to ~/.bashrc:  eval "$(shellwise init bash)"
+  Add to fish config: shellwise init fish | source
 
 Features:
   - Auto-save: commands are recorded automatically
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
       case "init": {
         const shell = args[1];
         if (!shell) {
-          console.error("Usage: shellwise init <zsh|bash> [--remote]");
+          console.error("Usage: shellwise init <zsh|bash|fish> [--remote]");
           process.exit(1);
         }
         runInit(shell, "shellwise", { remote: args.includes("--remote") });

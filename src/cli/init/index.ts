@@ -1,7 +1,8 @@
 import { generateZshScript, type InitOptions } from "./zsh";
 import { generateBashScript } from "./bash";
+import { generateFishScript } from "./fish";
 
-export { generateZshScript, generateBashScript };
+export { generateZshScript, generateBashScript, generateFishScript };
 export type { InitOptions };
 
 export function runInit(shell: string, binaryPath: string, opts: InitOptions = {}): void {
@@ -16,8 +17,15 @@ export function runInit(shell: string, binaryPath: string, opts: InitOptions = {
       }
       process.stdout.write(generateBashScript(binaryPath));
       break;
+    case "fish":
+      if (opts.remote) {
+        console.error("Remote mode supports zsh only (fish integration needs the binary).");
+        process.exit(1);
+      }
+      process.stdout.write(generateFishScript(binaryPath));
+      break;
     default:
-      console.error(`Unsupported shell: ${shell}. Supported: zsh, bash`);
+      console.error(`Unsupported shell: ${shell}. Supported: zsh, bash, fish`);
       process.exit(1);
   }
 }

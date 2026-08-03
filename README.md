@@ -50,7 +50,7 @@ All of these are excellent tools — the difference is *where* the suggestions l
 | Fuzzy `Ctrl+R` search | ✅ | ✅ | ✅ | ❌ |
 | Cross-machine sync | ❌ local-only by design | ✅ optional e2e-encrypted | ❌ | ❌ |
 | Works over SSH with nothing installed remotely | ✅ `sw ssh` | ❌ install on both ends | ❌ | ❌ |
-| Bash support | ✅ (`Ctrl+R` + auto-save) | ✅ | ✅ | ❌ zsh only |
+| Shells | ✅ zsh + fish (dropdown), bash (`Ctrl+R`) | ✅ | ✅ | ❌ zsh only |
 
 **TL;DR** — if you want encrypted history sync across machines, use atuin.
 If you want a ranked dropdown **under your prompt as you type** — no keybind,
@@ -86,7 +86,7 @@ npm install -g shellwise
 > The Homebrew formula (and the tarballs on [GitHub Releases](https://github.com/kurovu146/shellwise/releases))
 > ship a **self-contained binary** — you do **not** need Bun, Node, or any other runtime.
 
-Shell integration is auto-injected into your `~/.zshrc` or `~/.bashrc`.
+Shell integration is auto-injected into your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`.
 **Open a new terminal** (or `source` your rc file) to activate.
 
 <details>
@@ -100,13 +100,18 @@ eval "$(shellwise init zsh)"
 eval "$(shellwise init bash)"
 ```
 
+```fish
+# ~/.config/fish/config.fish
+shellwise init fish | source
+```
+
 </details>
 
 ## 🚀 Usage
 
 Just start typing. After 2+ characters, suggestions from your history appear inline.
 
-### While typing *(zsh)*
+### While typing *(zsh + fish)*
 
 | Key | Action |
 |-----|--------|
@@ -159,7 +164,7 @@ Both `shellwise` and the short alias `sw` work:
 sw ssh [ssh options] <host>    # SSH with suggestions on the remote host
 sw search [--query <text>]     # Interactive fuzzy search (same as Ctrl+R)
 sw delete [query]              # Interactively search & delete an entry
-sw import [zsh|bash]           # Import your existing shell history
+sw import [zsh|bash|fish]      # Import your existing shell history
 sw stats                       # Usage statistics
 sw prune --days <n>            # Remove entries older than n days
 sw daemon start|stop|status    # Manage the background daemon
@@ -172,6 +177,7 @@ sw version                     # Show version (and notify if an update exists)
 ```bash
 sw import zsh      # from ~/.zsh_history
 sw import bash     # from ~/.bash_history
+sw import fish     # from ~/.local/share/fish/fish_history
 
 sw delete          # browse all, pick one to delete
 sw delete git      # pre-filter with "git"
@@ -214,7 +220,10 @@ Everything is local to your machine:
 ## ✅ Requirements
 
 - macOS or Linux
-- Zsh (full experience) or Bash (auto-save + `Ctrl+R` search)
+- Zsh or fish (full experience) — or Bash (auto-save + `Ctrl+R` search)
+- fish needs `nc` or `socat` for the dropdown, since fish has no socket builtin.
+  macOS ships `nc`; on Linux install `netcat-openbsd`. Without either, fish keeps
+  auto-save and `Ctrl+R`, just no dropdown.
 - [Bun](https://bun.sh) ≥ 1.0.0 — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries are standalone.
 
 ## ⬆️ Update

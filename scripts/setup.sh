@@ -64,12 +64,20 @@ inject_to_rc() {
     cp "$rc_file" "${rc_file}.shellwise-backup"
   fi
 
-  # Append integration
-  cat >> "$rc_file" << EOF
+  # Append integration. fish has no `eval "$(...)"` — it pipes into `source`.
+  if [[ "$shell_name" == "fish" ]]; then
+    cat >> "$rc_file" << EOF
+
+$MARKER
+$SW_BIN init fish | source
+EOF
+  else
+    cat >> "$rc_file" << EOF
 
 $MARKER
 eval "\$($SW_BIN init $shell_name)"
 EOF
+  fi
 
   echo -e "${GREEN}${BOLD}[shellwise]${RESET}${GREEN} Added to $rc_file${RESET}"
 }
@@ -89,9 +97,13 @@ case "$SHELL_NAME" in
       inject_to_rc "$HOME/.bash_profile" "bash"
     fi
     ;;
+  fish)
+    mkdir -p "$HOME/.config/fish"
+    inject_to_rc "$HOME/.config/fish/config.fish" "fish"
+    ;;
   *)
     echo -e "${YELLOW}[shellwise]${RESET} Unsupported shell: $SHELL_NAME"
-    echo '  Supported: zsh, bash'
+    echo '  Supported: zsh, bash, fish'
     echo '  Add manually: eval "$(shellwise init zsh)"'
     exit 0
     ;;
