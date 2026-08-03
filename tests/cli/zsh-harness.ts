@@ -15,7 +15,10 @@ export function hasZsh(): boolean {
  * because ZLE is not loaded outside an interactive line editor — the functions
  * under test only write plain variables, so they run fine without it.
  */
-export function runZshProbe(body: string): { stdout: string; stderr: string; exitCode: number } {
+export function runZshProbe(
+  body: string,
+  env: Record<string, string> = {}
+): { stdout: string; stderr: string; exitCode: number } {
   const dir = mkdtempSync(join(tmpdir(), "sw-zsh-"));
   const script = join(dir, "sw.zsh");
   const probe = join(dir, "probe.zsh");
@@ -23,7 +26,7 @@ export function runZshProbe(body: string): { stdout: string; stderr: string; exi
   writeFileSync(script, generateZshScript("shellwise", { remote: true }));
   writeFileSync(probe, `zle() { : }\nbindkey() { : }\nsource ${script}\n${body}\n`);
 
-  const p = Bun.spawnSync(["zsh", "-f", probe]);
+  const p = Bun.spawnSync(["zsh", "-f", probe], { env: { ...process.env, ...env } });
   return {
     stdout: p.stdout.toString(),
     stderr: p.stderr.toString(),

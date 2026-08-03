@@ -124,6 +124,20 @@ describe.skipIf(!zsh)("__sw_render — framed dropdown", () => {
     expect(widths(out.stdout)).toEqual([28, 28, 28, 28]);
   });
 
+  test("no tty means no COLUMNS — assume 80 rather than collapsing the frame", () => {
+    const out = runZshProbe(`
+      BUFFER="git"
+      __sw_suggestions=("git status")
+      __sw_sources=(history)
+      __sw_selected=-1
+      # zsh sets this to 0 when it has no terminal.
+      COLUMNS=0
+      __sw_render
+      ${probeWidths}
+    `);
+    expect(widths(out.stdout)).toEqual([78, 78, 78]);
+  });
+
   test("a very narrow terminal falls back to the plain list", () => {
     const out = runZshProbe(`
       BUFFER="git"

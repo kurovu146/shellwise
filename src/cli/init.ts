@@ -85,6 +85,7 @@ __sw_search_widget() {
   POSTDISPLAY=""
   region_highlight=()
   __sw_suggestions=()
+  __sw_sources=()
   local selected
   selected="\$(command ${bin} search --query "\$LBUFFER" </dev/tty 2>/dev/tty)"
   local ret=\$?
@@ -217,6 +218,8 @@ __sw_render() {
   [[ \${#__sw_suggestions} -eq 0 ]] && return
 
   local cols=\${COLUMNS:-80}
+  # zsh reports 0 columns when there is no tty (scripts, some multiplexers).
+  (( cols < 1 )) && cols=80
   local offset=\${#BUFFER}
   local i line start
 
@@ -368,12 +371,29 @@ __sw_backward_kill_word() {
   __sw_suggest
 }
 
+# ─── Selection → input line ────────────────────────────────
+
+# Tab writes the highlighted command straight into the line, so what you see is
+# what Enter runs. Index -1 means "the text you typed".
+__sw_apply_selection() {
+  if [[ \$__sw_selected -ge 0 ]]; then
+    BUFFER="\${__sw_suggestions[\$(( __sw_selected + 1 ))]}"
+  else
+    BUFFER="\$__sw_original"
+  fi
+  CURSOR=\${#BUFFER}
+  # Our own edit — don't let it look like typing and trigger a fresh query.
+  __sw_prev_buffer="\$BUFFER"
+  __sw_render
+}
+
 # ─── Tab: next result ──────────────────────────────────────
 
 __sw_next() {
   if [[ \${#__sw_suggestions} -gt 0 ]]; then
-    __sw_selected=\$(( (__sw_selected + 1) % \${#__sw_suggestions} ))
-    __sw_render
+    __sw_selected=\$(( __sw_selected + 1 ))
+    (( __sw_selected >= \${#__sw_suggestions} )) && __sw_selected=-1
+    __sw_apply_selection
   else
     zle expand-or-complete
   fi
@@ -383,13 +403,9 @@ __sw_next() {
 
 __sw_prev() {
   if [[ \${#__sw_suggestions} -gt 0 ]]; then
-    if [[ \$__sw_selected -lt 0 ]]; then
-      # From the typed line, Shift+Tab wraps to the last item
-      __sw_selected=\$(( \${#__sw_suggestions} - 1 ))
-    else
-      __sw_selected=\$(( (__sw_selected - 1 + \${#__sw_suggestions}) % \${#__sw_suggestions} ))
-    fi
-    __sw_render
+    __sw_selected=\$(( __sw_selected - 1 ))
+    (( __sw_selected < -1 )) && __sw_selected=\$(( \${#__sw_suggestions} - 1 ))
+    __sw_apply_selection
   else
     zle .reverse-menu-complete
   fi
@@ -398,16 +414,12 @@ __sw_prev() {
 # ─── Enter: accept selected or execute ─────────────────────
 
 __sw_accept_line() {
-  # Only replace BUFFER when the user has actually moved into the list
-  # (Tab/Shift+Tab → __sw_selected >= 0). With nothing selected, Enter runs
-  # exactly what was typed.
-  if [[ \${#__sw_suggestions} -gt 0 && \$__sw_selected -ge 0 ]]; then
-    BUFFER="\${__sw_suggestions[\$(( __sw_selected + 1 ))]}"
-    CURSOR=\${#BUFFER}
-  fi
+  # BUFFER already holds whatever is highlighted — Tab put it there — so Enter
+  # runs exactly what the line shows.
   POSTDISPLAY=""
   region_highlight=()
   __sw_suggestions=()
+  __sw_sources=()
   __sw_prev_buffer="\$BUFFER"
   zle .accept-line
 }
@@ -416,9 +428,11 @@ __sw_accept_line() {
 
 __sw_dismiss() {
   if [[ \${#__sw_suggestions} -gt 0 ]]; then
+    # Close the frame, keep the command Tab filled in so it can be edited.
     POSTDISPLAY=""
     region_highlight=()
     __sw_suggestions=()
+    __sw_sources=()
     __sw_prev_buffer="\$BUFFER"
   else
     zle .send-break
@@ -436,6 +450,7 @@ __sw_forward_char() {
     POSTDISPLAY=""
     region_highlight=()
     __sw_suggestions=()
+    __sw_sources=()
     __sw_prev_buffer="\$BUFFER"
   else
     zle .forward-char
