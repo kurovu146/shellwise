@@ -22,10 +22,8 @@ export function runAdd(opts: AddOptions): void {
   // Only save successful commands (exit code 0)
   if (opts.exitCode !== undefined && opts.exitCode !== 0) return;
 
-  // Skip shellwise's own commands
-  const baseCmd = cmd.split(/\s+/)[0];
-  if (baseCmd === "shellwise" || baseCmd === "sw") return;
-
+  // shellwise's own commands are recorded like any other: only a command the
+  // user actually typed reaches this function.
   insertCommand({
     command: cmd,
     cwd: opts.cwd,

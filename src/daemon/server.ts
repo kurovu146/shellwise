@@ -108,8 +108,9 @@ export function handleRequest(raw: string): string {
       const cmd = req.command.trim();
       if (!cmd || cmd.length < 2 || cmd.startsWith(" ")) return "OK\n\n";
       if (req.exitCode !== 0) return "OK\n\n";
-      const baseCmd = cmd.split(/\s+/)[0];
-      if (baseCmd === "shellwise" || baseCmd === "sw") return "OK\n\n";
+      // shellwise's own commands are recorded like any other: the internal
+      // calls never reach this path (suggestions go over the socket, Ctrl+R
+      // runs inside a widget), so anything arriving here was typed by hand.
       insertCommand({
         command: cmd,
         cwd: req.cwd || undefined,
