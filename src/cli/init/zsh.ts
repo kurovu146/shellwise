@@ -89,6 +89,11 @@ __sw_search_widget() {
 # Session tracking
 export SW_SESSION_ID="\$(command uuidgen 2>/dev/null || echo "\$\$-\$RANDOM")"
 
+# An older release exported these, so a parent shell may still be leaking them
+# into this one. Drop them before the first prompt, or this shell would record
+# whatever the parent was running.
+unset __SW_COMMAND __SW_START_TIME
+
 # State
 typeset -g __sw_prev_buffer=""
 typeset -ga __sw_suggestions=()
@@ -164,8 +169,11 @@ __sw_query() {
 # ─── Command Capture (auto-save) ───────────────────────────
 
 __sw_preexec() {
-  export __SW_START_TIME=\$EPOCHREALTIME
-  export __SW_COMMAND="\$1"
+  # Shell-local, never exported: an exported value is inherited by every child
+  # shell, which would then save the parent's command again on its first
+  # prompt — with the child's cwd and session id.
+  typeset -g __SW_START_TIME=\$EPOCHREALTIME
+  typeset -g __SW_COMMAND="\$1"
 }
 
 __sw_precmd() {
