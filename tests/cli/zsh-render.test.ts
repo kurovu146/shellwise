@@ -79,6 +79,42 @@ describe.skipIf(!zsh)("__sw_render — framed dropdown", () => {
     expect(widths(out.stdout)).toEqual([58, 58, 58]);
   });
 
+  test("truncation keeps the tail, where two similar commands differ", () => {
+    const a = "docker run --rm -it -v /very/long/path:/app -w /app node:20 npm run build";
+    const b = "docker run --rm -it -v /very/long/path:/app -w /app node:20 npm run test";
+    const out = runZshProbe(`
+      BUFFER="doc"
+      __sw_suggestions=("${a}" "${b}")
+      __sw_sources=(history history)
+      __sw_selected=-1
+      COLUMNS=60
+      __sw_render
+      print -r -- "$POSTDISPLAY"
+      ${probeWidths}
+    `);
+    // The head stays readable and the ending — the only difference — survives.
+    expect(out.stdout).toContain("docker run --rm -it");
+    expect(out.stdout).toContain("npm run build");
+    expect(out.stdout).toContain("npm run test");
+    expect(widths(out.stdout)).toEqual([58, 58, 58, 58]);
+  });
+
+  test("a truncated wide-character command still fits the frame exactly", () => {
+    const long = "echo 你好世界你好世界你好世界你好世界 🚀🚀🚀 done with a long tail";
+    const out = runZshProbe(`
+      BUFFER="ec"
+      __sw_suggestions=("${long}")
+      __sw_sources=(common)
+      __sw_selected=-1
+      COLUMNS=60
+      __sw_render
+      print -r -- "$POSTDISPLAY"
+      ${probeWidths}
+    `);
+    expect(out.stdout).toContain("…");
+    expect(widths(out.stdout)).toEqual([58, 58, 58]);
+  });
+
   test("wide characters do not push the border out of line", () => {
     const out = runZshProbe(`
       BUFFER="ec"

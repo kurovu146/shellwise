@@ -271,9 +271,16 @@ __sw_render() {
     # Pad by display width — a CJK glyph or emoji eats two columns.
     local w=\${(m)#cmd}
     if (( w > cmd_max )); then
-      local cut="\${cmd[1,\$cmd_max]}"
-      while (( \${(m)#cut} > cmd_max - 1 )); do cut="\${cut[1,-2]}"; done
-      cmd="\${cut}…"
+      # Elide the middle, not the tail: commands that share a long prefix
+      # differ at the end (flags, paths, branch names), and that is what has
+      # to stay visible.
+      local head_w=\$(( (cmd_max - 1) / 2 ))
+      local head_s="\${cmd[1,\$head_w]}"
+      while (( \${(m)#head_s} > head_w )); do head_s="\${head_s[1,-2]}"; done
+      local tail_w=\$(( cmd_max - 1 - \${(m)#head_s} ))
+      local tail_s="\${cmd[-\$tail_w,-1]}"
+      while (( \${(m)#tail_s} > tail_w )); do tail_s="\${tail_s[2,-1]}"; done
+      cmd="\${head_s}…\${tail_s}"
       w=\${(m)#cmd}
     fi
     local pad=\$(( cmd_max - w ))
