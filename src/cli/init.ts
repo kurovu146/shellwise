@@ -109,6 +109,8 @@ export SW_SESSION_ID="\$(command uuidgen 2>/dev/null || echo "\$\$-\$RANDOM")"
 # State
 typeset -g __sw_prev_buffer=""
 typeset -ga __sw_suggestions=()
+typeset -ga __sw_sources=()
+typeset -g __sw_original=""
 typeset -g __sw_selected=0
 typeset -g __sw_fd=""
 typeset -g __sw_ready=0
@@ -214,27 +216,104 @@ __sw_render() {
 
   [[ \${#__sw_suggestions} -eq 0 ]] && return
 
-  local buf_len=\${#BUFFER}
-  local offset=\$buf_len
+  local cols=\${COLUMNS:-80}
+  local offset=\${#BUFFER}
+  local i line start
 
-  local i
+  # Too narrow for a frame: plain list, same as it always was.
+  if (( cols < 24 )); then
+    for (( i=1; i<=\${#__sw_suggestions}; i++ )); do
+      local marker="  "
+      (( i - 1 == __sw_selected )) && marker="› "
+      line=\$'\\n'"  \${marker}\${__sw_suggestions[\$i]}"
+      start=\$offset
+      POSTDISPLAY+="\$line"
+      offset=\$(( offset + \${#line} ))
+      if (( i - 1 == __sw_selected )); then
+        region_highlight+=("\$start \$offset fg=cyan,bold")
+      else
+        region_highlight+=("\$start \$offset fg=245")
+      fi
+    done
+    return
+  fi
+
+  local show_tag=1
+  (( cols < 40 )) && show_tag=0
+
+  local box=\$(( cols - 4 ))
+  local inner=\$(( box - 2 ))
+  local cmd_max
+  if (( show_tag )); then
+    # 2 padding + 2 marker + 1 gap + 7 tag
+    cmd_max=\$(( inner - 12 ))
+  else
+    cmd_max=\$(( inner - 4 ))
+  fi
+
+  local bar="\${(l:\$inner::─:)}"
+
+  line=\$'\\n'"  ╭\${bar}╮"
+  start=\$offset
+  POSTDISPLAY+="\$line"
+  offset=\$(( offset + \${#line} ))
+  region_highlight+=("\$start \$offset fg=240")
+
   for (( i=1; i<=\${#__sw_suggestions}; i++ )); do
-    local item="\${__sw_suggestions[\$i]}"
+    local cmd="\${__sw_suggestions[\$i]}"
+    local src="\${__sw_sources[\$i]}"
     local marker="  "
-    if [[ \$(( i - 1 )) -eq \$__sw_selected ]]; then
-      marker="› "
+    (( i - 1 == __sw_selected )) && marker="› "
+
+    # Pad by display width — a CJK glyph or emoji eats two columns.
+    local w=\${(m)#cmd}
+    if (( w > cmd_max )); then
+      local cut="\${cmd[1,\$cmd_max]}"
+      while (( \${(m)#cut} > cmd_max - 1 )); do cut="\${cut[1,-2]}"; done
+      cmd="\${cut}…"
+      w=\${(m)#cmd}
     fi
-    local line=\$'\\n'"  \${marker}\${item}"
-    local start=\$offset
+    local pad=\$(( cmd_max - w ))
+    local spaces=""
+    (( pad > 0 )) && spaces="\${(l:\$pad:)}"
+
+    local tag=""
+    (( show_tag )) && tag=" \${(l:7:)src}"
+
+    line=\$'\\n'"  │ \${marker}\${cmd}\${spaces}\${tag} │"
+    start=\$offset
     POSTDISPLAY+="\$line"
     offset=\$(( offset + \${#line} ))
 
-    if [[ \$(( i - 1 )) -eq \$__sw_selected ]]; then
-      region_highlight+=("\$start \$offset fg=cyan,bold")
+    # Highlight offsets count characters, not columns: "\\n  │ " is 5 of them.
+    local s2=\$(( start + 5 ))
+    local s3=\$(( s2 + 2 + \${#cmd} + pad ))
+    region_highlight+=("\$start \$s2 fg=240")
+    if (( i - 1 == __sw_selected )); then
+      region_highlight+=("\$s2 \$s3 fg=cyan,bold")
     else
-      region_highlight+=("\$start \$offset fg=245")
+      region_highlight+=("\$s2 \$s3 fg=245")
+    fi
+    if (( show_tag )); then
+      region_highlight+=("\$s3 \$(( s3 + 1 )) fg=240")
+      if [[ "\$src" == history ]]; then
+        region_highlight+=("\$(( s3 + 1 )) \$(( s3 + 8 )) fg=108")
+      elif [[ "\$src" == common ]]; then
+        region_highlight+=("\$(( s3 + 1 )) \$(( s3 + 8 )) fg=110")
+      else
+        region_highlight+=("\$(( s3 + 1 )) \$(( s3 + 8 )) fg=240")
+      fi
+      region_highlight+=("\$(( s3 + 8 )) \$offset fg=240")
+    else
+      region_highlight+=("\$s3 \$offset fg=240")
     fi
   done
+
+  line=\$'\\n'"  ╰\${bar}╯"
+  start=\$offset
+  POSTDISPLAY+="\$line"
+  offset=\$(( offset + \${#line} ))
+  region_highlight+=("\$start \$offset fg=240")
 }
 
 # ─── Auto-suggest (zero-fork, never blocks typing) ───────
@@ -246,15 +325,29 @@ __sw_suggest() {
   # Tab moves into the list (0 = first item).
   __sw_selected=-1
   __sw_suggestions=()
+  __sw_sources=()
+  __sw_original="\$BUFFER"
   POSTDISPLAY=""
   region_highlight=()
 
   [[ \${#BUFFER} -lt 2 ]] && return
 
-  # Socket query only — no fallback, never spawn process during typing
-  __sw_query SUGGEST "\$BUFFER" 5 || return
+  # Socket query only — no fallback, never spawn process during typing.
+  # "v2" asks the daemon to say where each suggestion came from.
+  __sw_query SUGGEST "\$BUFFER" 5 v2 || return
 
-  __sw_suggestions=("\${__sw_tcp_result[@]}")
+  local __sw_line
+  for __sw_line in "\${__sw_tcp_result[@]}"; do
+    if [[ "\$__sw_line" == *\$'\\t'* ]]; then
+      __sw_sources+=("\${__sw_line%%\$'\\t'*}")
+      __sw_suggestions+=("\${__sw_line#*\$'\\t'}")
+    else
+      # Daemon predates v2: render the row without a tag.
+      __sw_sources+=("")
+      __sw_suggestions+=("\$__sw_line")
+    fi
+  done
+
   __sw_render
 }
 
