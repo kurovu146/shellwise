@@ -120,14 +120,17 @@ ${daemonAlive}
 # (Re)establish the persistent connection. No fork while typing.
 __sw_connect() {
   __sw_ready=0
-  [[ -n "\$__sw_fd" ]] && { zsocket -c \$__sw_fd 2>/dev/null; __sw_fd="" }
+  [[ -n "\$__sw_fd" ]] && { exec {__sw_fd}>&- 2>/dev/null; __sw_fd="" }
   [[ -S "\$__sw_sock" ]] || return 1
   zsocket "\$__sw_sock" 2>/dev/null || return 1
   __sw_fd=\$REPLY
   __sw_ready=1
 }
 
-# Load socket module + connect at shell startup
+# Load socket module + connect at shell startup.
+# zsh/system comes along for sysread, the only reader that distinguishes "the
+# peer closed" from "nothing has arrived yet" — see __sw_on_reply.
+zmodload zsh/system 2>/dev/null
 ${bootstrap}
 
 # ─── Persistent query (no connect/disconnect overhead) ─────
@@ -186,14 +189,37 @@ typeset -g __sw_sfd=""
 typeset -g __sw_srbuf=""
 typeset -ga __sw_squeue=()
 
-__sw_sconnect() {
-  if [[ -n "\$__sw_sfd" ]]; then
-    zle -F \$__sw_sfd 2>/dev/null
-    zsocket -c \$__sw_sfd 2>/dev/null
-    __sw_sfd=""
-  fi
+# Let the channel go. Unregister BEFORE closing: a handler left behind on a
+# socket whose peer has died is the tight loop this whole section guards
+# against. Parse state is cleared too, so a later reconnect cannot glue a fresh
+# reply onto the tail of an abandoned one.
+#
+# The close is \`exec {fd}>&-\`, not \`zsocket -c\`: zsh 5.9's zsocket has no -c
+# option at all — it answers "bad option: -c", and with stderr discarded the
+# socket quietly stayed open. Every reconnect then leaked another fd.
+__sw_sdrop() {
+  [[ -n "\$__sw_sfd" ]] || return 0
+  zle -F \$__sw_sfd 2>/dev/null
+  exec {__sw_sfd}>&- 2>/dev/null
+  __sw_sfd=""
   __sw_srbuf=""
   __sw_squeue=()
+}
+
+# The daemon is gone, and both channels point at that same dead process. Drop
+# the query connection as well rather than sitting on a closed socket until the
+# next query happens to notice; __sw_query reconnects on demand.
+__sw_daemon_gone() {
+  __sw_sdrop
+  if [[ -n "\$__sw_fd" ]]; then
+    exec {__sw_fd}>&- 2>/dev/null
+    __sw_fd=""
+  fi
+  __sw_ready=0
+}
+
+__sw_sconnect() {
+  __sw_sdrop
   [[ -S "\$__sw_sock" ]] || return 1
   zsocket "\$__sw_sock" 2>/dev/null || return 1
   __sw_sfd=\$REPLY
@@ -239,17 +265,35 @@ __sw_async_render() {
 zle -N __sw_async_render
 
 __sw_on_reply() {
-  local __sw_line
-  while IFS= read -r -t 0 -u \$__sw_sfd __sw_line 2>/dev/null; do
-    if [[ -z "\$__sw_line" ]]; then
-      __sw_reply_for="\${__sw_squeue[1]}"
-      [[ \${#__sw_squeue} -gt 0 ]] && shift __sw_squeue
-      __sw_reply_raw="\$__sw_srbuf"
-      __sw_srbuf=""
-      zle __sw_async_render
-      continue
-    fi
-    __sw_srbuf+="\$__sw_line"\$'\\n'
+  # ZLE passes a reason as \$2 for hup/nval/err. Nothing will ever arrive on
+  # this fd again, and leaving the handler registered on it is precisely what
+  # burns a core.
+  [[ -n "\$2" ]] && { __sw_daemon_gone; return }
+
+  # sysread, not \`read -t 0\`: read reports the same failure for "nothing yet"
+  # and for "the peer closed", so a handler built on it cannot tell that the
+  # socket is finished — and a closed socket stays readable forever, so ZLE
+  # re-enters the handler as fast as it can, for as long as the pane lives.
+  # sysread separates the two: 5 is EOF, 4 is empty-for-now.
+  local __sw_chunk
+  integer __sw_rc
+  while true; do
+    sysread -i \$__sw_sfd -t 0 __sw_chunk 2>/dev/null
+    __sw_rc=\$?
+    (( __sw_rc == 5 )) && { __sw_daemon_gone; return }
+    (( __sw_rc != 0 )) && break
+    __sw_srbuf+="\$__sw_chunk"
+  done
+
+  # A blank line ends a reply, so a frame is everything up to the first "\\n\\n".
+  # Bytes past it belong to the next reply and stay buffered; a frame that is
+  # still incomplete waits for the rest instead of being rendered half-read.
+  while [[ "\$__sw_srbuf" == *\$'\\n\\n'* ]]; do
+    __sw_reply_for="\${__sw_squeue[1]}"
+    [[ \${#__sw_squeue} -gt 0 ]] && shift __sw_squeue
+    __sw_reply_raw="\${__sw_srbuf%%\$'\\n\\n'*}"
+    __sw_srbuf="\${__sw_srbuf#*\$'\\n\\n'}"
+    zle __sw_async_render
   done
 }
 
