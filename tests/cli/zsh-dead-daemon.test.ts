@@ -62,6 +62,12 @@ function cpuSeconds(pid: number): number {
   return parts.reduce((acc, part) => acc * 60 + part, 0);
 }
 
+/** Every unix socket this shell holds open, live or not. */
+function openSockets(pid: number): number {
+  const out = Bun.spawnSync(["lsof", "-p", String(pid)], { stderr: "ignore" }).stdout.toString();
+  return out.split("\n").filter((l) => l.split(/\s+/)[4] === "unix").length;
+}
+
 /** How many of this shell's sockets have lost their peer (`->(none)` in lsof). */
 function deadSockets(pid: number): number {
   const out = Bun.spawnSync(["lsof", "-p", String(pid)], { stderr: "ignore" }).stdout.toString();
@@ -82,7 +88,7 @@ function spawnDaemon(socket: string, log: string) {
   if (!existsSync(socket)) throw new Error("fake daemon never came up");
 }
 
-function startShell(): { log: string } {
+function startShell(): { log: string; script: string } {
   const dir = mkdtempSync(join(tmpdir(), "sw-dead-"));
   socketPath = join(dir, "d.sock");
   const log = join(dir, "req.log");
@@ -101,7 +107,7 @@ function startShell(): { log: string } {
     `env ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socketPath} zsh -i`,
   ]);
   Bun.sleepSync(1500);
-  return { log };
+  return { log, script };
 }
 
 /** Open the async channel and prove it works, so the fd under test is live. */
@@ -128,7 +134,7 @@ describe.skipIf(!zsh || !tmux)("when the daemon dies under a live async channel"
     // burns approximately nothing. The gap is three orders of magnitude, so
     // any threshold in between separates them.
     expect(burned).toBeLessThan(0.3);
-  });
+  }, 30_000);
 
   test("the dead fd is let go rather than left registered", () => {
     startShell();
@@ -141,7 +147,52 @@ describe.skipIf(!zsh || !tmux)("when the daemon dies under a live async channel"
     // The reply handler holds the only fd that can lose its peer while the
     // shell sits idle; if it unregistered and closed, nothing is left dangling.
     expect(deadSockets(panePid())).toBe(0);
-  });
+  }, 30_000);
+
+  test("a channel orphaned by re-sourcing the script does not spin either", () => {
+    // Re-sourcing (a fresh `.zshrc`, or `eval "$(shellwise init zsh)"`) resets
+    // __sw_sfd to a new connection while the previous fd keeps its handler.
+    // That orphan is invisible to the variable, so the handler has to work out
+    // which fd actually woke it rather than assuming it is the current one.
+    const { script } = startShell();
+    openAsyncChannel();
+
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "C-c"]);
+    Bun.sleepSync(300);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, `source ${script}`, "Enter"]);
+    Bun.sleepSync(800);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "gi"]);
+    Bun.sleepSync(800);
+
+    daemonProc?.kill();
+    daemonProc = null;
+    Bun.sleepSync(400);
+
+    const pid = panePid();
+    const before = cpuSeconds(pid);
+    Bun.sleepSync(3000);
+
+    expect(cpuSeconds(pid) - before).toBeLessThan(0.3);
+  }, 30_000);
+
+  test("re-sourcing the script hands back the connections it replaces", () => {
+    // Sourcing again resets __sw_fd/__sw_sfd, which is the only record of the
+    // fds the previous copy opened. Reset without closing and every reload
+    // strands two more sockets for the life of the pane.
+    const { script } = startShell();
+    openAsyncChannel();
+    const pid = panePid();
+    const before = openSockets(pid);
+
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "C-c"]);
+    Bun.sleepSync(300);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, `source ${script}`, "Enter"]);
+    Bun.sleepSync(800);
+    Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "gi"]);
+    Bun.sleepSync(800);
+
+    expect(openSockets(pid)).toBe(before);
+  }, 30_000);
 
   test("typing reconnects once a daemon is back, without stacking dead fds", () => {
     const { log } = startShell();
@@ -158,5 +209,5 @@ describe.skipIf(!zsh || !tmux)("when the daemon dies under a live async channel"
 
     expect(waitFor("git stash", 5000)).toBe(true);
     expect(deadSockets(panePid())).toBe(0);
-  });
+  }, 30_000);
 });

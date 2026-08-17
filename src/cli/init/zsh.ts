@@ -100,6 +100,13 @@ export SW_SESSION_ID="\$(command uuidgen 2>/dev/null || echo "\$\$-\$RANDOM")"
 # whatever the parent was running.
 unset __SW_COMMAND __SW_START_TIME
 
+# Sourced a second time (a reloaded .zshrc, \`eval "\$(${bin} init zsh)"\`)? The
+# fd variables below are the only record of what the previous copy opened, and
+# resetting them strands those sockets — plus the reply handler still on the
+# async one — for the rest of the shell's life. Hand them back first.
+[[ -n "\${__sw_sfd:-}" ]] && { zle -F \$__sw_sfd 2>/dev/null; exec {__sw_sfd}>&- 2>/dev/null }
+[[ -n "\${__sw_fd:-}" ]] && exec {__sw_fd}>&- 2>/dev/null
+
 # State
 typeset -g __sw_prev_buffer=""
 typeset -ga __sw_suggestions=()
@@ -265,6 +272,18 @@ __sw_async_render() {
 zle -N __sw_async_render
 
 __sw_on_reply() {
+  # ZLE passes the fd that woke us as \$1. Trust that over __sw_sfd: sourcing
+  # the script a second time (a reloaded .zshrc, \`eval "\$(sw init zsh)"\`)
+  # repoints the variable at a fresh connection and leaves this handler on the
+  # old fd. That orphan is invisible to every other function here, so if it is
+  # not released on the way through it wakes us forever.
+  local __sw_efd="\${1:-\$__sw_sfd}"
+  if [[ "\$__sw_efd" != "\$__sw_sfd" ]]; then
+    zle -F \$__sw_efd 2>/dev/null
+    exec {__sw_efd}>&- 2>/dev/null
+    return
+  fi
+
   # ZLE passes a reason as \$2 for hup/nval/err. Nothing will ever arrive on
   # this fd again, and leaving the handler registered on it is precisely what
   # burns a core.
