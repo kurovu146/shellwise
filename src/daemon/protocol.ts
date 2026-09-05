@@ -2,6 +2,11 @@
  * Simple text protocol over Unix socket.
  * Request:  COMMAND\targ1\targ2\n
  * Response: line1\nline2\n\n  (empty line = end)
+ *
+ * Every reply ends with that blank line, including one with no body at all
+ * ("\n\n"). Clients read the stream by scanning for the terminator, so a reply
+ * that stops short of it is never recognised as finished and the next one is
+ * read as its continuation.
  */
 
 export type RequestType = "SUGGEST" | "ADD" | "STOP" | "PING";
@@ -96,7 +101,14 @@ export function formatSuggestResponse(
   results: { command: string; source: SuggestSource }[],
   tagged: boolean
 ): string {
-  if (results.length === 0) return "\n";
+  // No hits still means a finished frame: the body is empty and the blank-line
+  // terminator follows it. Returning a bare "\n" left the reply incomplete, so a
+  // persistent client (zsh's async channel) kept it in its buffer and glued the
+  // next answer onto the tail — that answer then carried the previous line's
+  // label, failed the "is this still what is on screen?" check, and was
+  // dropped. One unmatched query was enough to make suggestions flicker for
+  // the rest of the connection.
+  if (results.length === 0) return "\n\n";
   const lines = results.map((r) => (tagged ? `${r.source}\t${r.command}` : r.command));
   return lines.join("\n") + "\n\n";
 }

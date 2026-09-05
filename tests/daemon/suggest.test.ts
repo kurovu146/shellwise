@@ -43,7 +43,30 @@ describe("SUGGEST reply", () => {
     for (const line of lines) expect(line.startsWith("common\t")).toBe(true);
   });
 
+  // A reply with no body is still a whole frame. Clients find the end of a
+  // reply by looking for the blank-line terminator ("\n\n"); a bare "\n" never
+  // completes one, so it stays in the read buffer and the NEXT reply is glued
+  // onto its tail. The shell then labels that answer with the previous line,
+  // decides it no longer matches what is on screen, and drops it.
   test("a query with no hits still terminates the reply", () => {
-    expect(handleRequest("SUGGEST\tzzzznotacommand\t5\tv2")).toBe("\n");
+    expect(handleRequest("SUGGEST\tzzzznotacommand\t5\tv2")).toBe("\n\n");
+  });
+
+  test("a query too short to answer still terminates the reply", () => {
+    expect(handleRequest("SUGGEST\tg\t5\tv2")).toBe("\n\n");
+  });
+
+  test("an unparseable request still terminates the reply", () => {
+    expect(handleRequest("NOPE\tgarbage")).toBe("\n\n");
+  });
+
+  test("an empty reply does not swallow the next one on the same connection", () => {
+    // Exactly what a shell reads off the socket: two answers, back to back.
+    const stream =
+      handleRequest("SUGGEST\tzzzznotacommand\t5\tv2") + handleRequest("SUGGEST\tgit\t5\tv2");
+    const frames = stream.split("\n\n").slice(0, -1);
+    expect(frames.length).toBe(2);
+    expect(frames[0]).toBe("");
+    expect(frames[1]).toContain("history\tgit status");
   });
 });

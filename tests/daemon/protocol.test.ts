@@ -56,9 +56,12 @@ describe("formatSuggestResponse", () => {
     );
   });
 
-  test("no results terminates the reply without a body", () => {
-    expect(formatSuggestResponse([], true)).toBe("\n");
-    expect(formatSuggestResponse([], false)).toBe("\n");
+  // Empty still means a complete frame: clients split the stream on the
+  // blank-line terminator, so a body-less reply has to carry one too or the
+  // next reply is read as its continuation.
+  test("no results still terminates the reply", () => {
+    expect(formatSuggestResponse([], true)).toBe("\n\n");
+    expect(formatSuggestResponse([], false)).toBe("\n\n");
   });
 
   test("the source goes first so a tab inside a command survives the round trip", () => {

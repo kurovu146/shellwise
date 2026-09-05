@@ -45,7 +45,7 @@ function resetIdleTimer() {
 
 export function handleRequest(raw: string): string {
   const req = parseRequest(raw);
-  if (!req) return "\n";
+  if (!req) return "\n\n";
 
   resetIdleTimer();
 
@@ -54,7 +54,7 @@ export function handleRequest(raw: string): string {
       return "PONG\n\n";
 
     case "SUGGEST": {
-      if (!req.query || req.query.length < 2) return "\n";
+      if (!req.query || req.query.length < 2) return "\n\n";
 
       const historyResults: string[] = [];
       const historyLimit = 5;
