@@ -28,6 +28,8 @@
     "autosuggest",
     "zsh",
     "bash",
+    "powershell",
+    "windows",
     "command-history",
     "shellwise"
   ],
