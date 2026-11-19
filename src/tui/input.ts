@@ -1,5 +1,4 @@
-import { openSync, readSync, closeSync } from "fs";
-import { execSync } from "child_process";
+import { getTty } from "./tty";
 
 export type KeyEvent =
   | { type: "char"; char: string }
@@ -60,40 +59,20 @@ export function parseKeypress(data: Buffer): KeyEvent {
   return { type: "char", char: str };
 }
 
-// Use /dev/tty directly — avoids Bun kqueue bug with process.stdin
-// inside $() capture from shell integration
-let ttyReadFd: number | null = null;
-
-function getTtyReadFd(): number {
-  if (ttyReadFd === null) {
-    ttyReadFd = openSync("/dev/tty", "r");
-  }
-  return ttyReadFd;
-}
-
+// Terminal I/O is platform-specific (/dev/tty + stty on POSIX, the console
+// API on Windows); see ./tty for the backends.
 export function readKeypress(): Buffer {
-  // Large enough to hold a pasted chunk in one read; a 16-byte buffer split
-  // multi-byte UTF-8 (emoji, accented chars) across reads and corrupted them.
-  const buf = Buffer.alloc(4096);
-  const bytesRead = readSync(getTtyReadFd(), buf);
-  return buf.subarray(0, bytesRead);
+  return getTty().readKeypress();
 }
 
 export function enableRawMode(): void {
-  try {
-    execSync("stty raw -echo </dev/tty", { stdio: "ignore" });
-  } catch {}
+  getTty().enableRawMode();
 }
 
 export function disableRawMode(): void {
-  try {
-    execSync("stty -raw echo </dev/tty", { stdio: "ignore" });
-  } catch {}
+  getTty().disableRawMode();
 }
 
 export function closeTtyInput(): void {
-  if (ttyReadFd !== null) {
-    try { closeSync(ttyReadFd); } catch {}
-    ttyReadFd = null;
-  }
+  getTty().close();
 }
