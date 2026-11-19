@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, renameSync, rmdirSync, rmSync, readdirSync, rea
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { connect, createServer } from "net";
+import { Database } from "bun:sqlite";
 import { probeDaemon } from "../../src/daemon/client";
 
 // Spawns real daemons, so everything they touch lives in a private temp dir:
@@ -158,6 +159,79 @@ describe.skipIf(process.platform !== "win32")("daemon working directory", () => 
       await sw(env, "daemon", "stop");
     }
   });
+});
+
+describe("relative data dir", () => {
+  test("a relative XDG_DATA_HOME gives the daemon the same DB the CLI uses", async () => {
+    const cwd = join(dir, "rel-cwd");
+    mkdirSync(cwd);
+    const env = { ...envFor("rel"), XDG_DATA_HOME: "rel-data", XDG_CONFIG_HOME: "rel-config" };
+    const run = async (...args: string[]) => {
+      const p = Bun.spawn([process.execPath, ENTRY, ...args], { env, cwd, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+      const out = await new Response(p.stdout).text();
+      await p.exited;
+      return out;
+    };
+    try {
+      expect(await run("daemon", "start")).toContain("Daemon started");
+      await run("add", "--command", "echo relative-dir", "--exit-code", "0");
+      expect(await run("suggest", "--query", "echo relative")).toContain("echo relative-dir");
+    } finally {
+      await run("daemon", "stop");
+    }
+    // The daemon runs in the data dir: had it resolved "rel-data" again from
+    // there, a second DB would sit at rel-data/shellwise/rel-data/shellwise.
+    const dbs = (readdirSync(cwd, { recursive: true }) as string[]).filter((f) => f.endsWith("history.db"));
+    expect(dbs).toEqual([join("rel-data", "shellwise", "history.db")]);
+    const db = new Database(join(cwd, "rel-data", "shellwise", "history.db"), { readonly: true });
+    try {
+      expect(db.query("SELECT command FROM commands").all()).toEqual([{ command: "echo relative-dir" }]);
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+});
+
+// The daemon outlives `daemon start`: it must not keep the starter's output
+// pipe, or a caller reading that output to EOF waits until the daemon stops.
+describe("daemon start and the caller's output pipe", () => {
+  /** stdout+stderr of `p` read to EOF, or null if EOF did not come within 10s. */
+  async function readToEof(p: { stdout: ReadableStream; stderr: ReadableStream }) {
+    const both = Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    return Promise.race([both, Bun.sleep(10_000).then(() => null)]);
+  }
+
+  test("a piped caller gets EOF when `daemon start` exits, and the daemon keeps running", async () => {
+    const env = envFor("pipe");
+    try {
+      const p = Bun.spawn([process.execPath, ENTRY, "daemon", "start"], { env, stdout: "pipe", stderr: "pipe" });
+      const out = await readToEof(p);
+      expect(out).not.toBeNull();
+      expect(out![0]).toContain("Daemon started");
+      expect((await sw(env, "daemon", "status")).out).toContain("Daemon running");
+    } finally {
+      await sw(env, "daemon", "stop");
+    }
+  }, 20_000);
+
+  // Started through cmd.exe with its own output redirected, `daemon start`
+  // holds the caller's pipe as a plain inherited handle, not as stdout: the
+  // way PowerShell's background spawns hand it down.
+  test.skipIf(process.platform !== "win32")(
+    "the same through cmd.exe, where the pipe reaches `daemon start` as a plain inherited handle",
+    async () => {
+      const env = envFor("cmdpipe");
+      try {
+        const line = `""${process.execPath}" "${ENTRY}" daemon start >NUL 2>NUL"`;
+        const p = Bun.spawn(["cmd.exe", "/d", "/s", "/c", line], { env, stdout: "pipe", stderr: "pipe", windowsVerbatimArguments: true });
+        expect(await readToEof(p)).not.toBeNull();
+        expect((await sw(env, "daemon", "status")).out).toContain("Daemon running");
+      } finally {
+        await sw(env, "daemon", "stop");
+      }
+    },
+    20_000
+  );
 });
 
 describe("stale pid file", () => {

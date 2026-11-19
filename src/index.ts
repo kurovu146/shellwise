@@ -17,6 +17,8 @@ import { daemonRequest } from "./daemon/client";
 import { getSocketPath } from "./daemon/protocol";
 import { selfCommand } from "./utils/self";
 import { getDataDir } from "./utils/paths";
+import { stopHandleInheritance } from "./utils/win-handles";
+import { resolve as resolvePath } from "path";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -183,12 +185,24 @@ async function main(): Promise<void> {
               console.log("Daemon already running.");
               return;
             }
+            // The daemon runs in another directory (below), so relative paths
+            // given to this process must reach it already resolved, or it
+            // would use a second DB / config / socket under its own cwd.
+            const daemonEnv: Record<string, string | undefined> = { ...process.env };
+            for (const name of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "SHELLWISE_DAEMON_SOCKET"]) {
+              const value = process.env[name];
+              if (value) daemonEnv[name] = resolvePath(value);
+            }
+            // Keep every handle we were handed (a caller's output pipe among
+            // them) out of the long-lived daemon.
+            stopHandleInheritance();
             // Fork to background — respawn THIS executable, never a PATH
             // lookup (which could resolve to a different install).
             const proc = Bun.spawn([...selfCommand(), "daemon", "_run"], {
               // A neutral working directory: the daemon outlives its starter,
               // and on Windows a process's cwd cannot be renamed or removed.
               cwd: getDataDir(),
+              env: daemonEnv,
               stdio: ["ignore", "ignore", "ignore"],
               windowsHide: true,
               // @ts-ignore - Bun supports detached
