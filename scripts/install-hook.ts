@@ -3,7 +3,7 @@
 // Linux/macOS: runs setup.sh / uninstall.sh, as these hooks always did.
 // Windows: adds/removes the shellwise block in each PowerShell's profile and
 // starts/stops the daemon. Never fails the install.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 
 const MARKER = "# shellwise shell integration";
@@ -54,6 +54,11 @@ const UTF8_BOM = "\xEF\xBB\xBF";
 const splitLines = (text: string) => text.split(/(?<=\n)/).filter((l) => l !== "");
 const stripBom = (text: string) => (text.startsWith(UTF8_BOM) ? text.slice(UTF8_BOM.length) : text);
 const isMarker = (line: string) => stripBom(line).trim() === MARKER;
+/** A line running shellwise's (or sw's) PowerShell init, ours or hand-written; not a comment. */
+const isInitLine = (line: string) => {
+  const code = stripBom(line).trim();
+  return !code.startsWith("#") && /(^|[^\w.-])(shellwise|sw) init powershell\b/.test(code);
+};
 
 /**
  * Append the shellwise block to a PowerShell profile, creating it (and its
@@ -69,7 +74,9 @@ export function addToProfile(profilePath: string, bin: string): "added" | "prese
     return "added";
   }
   const { text, encode } = readProfile(profilePath);
-  if (splitLines(text).some(isMarker)) return "present";
+  // A hand-written init line (the documented manual set-up) counts too:
+  // a second one would run the init script twice per start.
+  if (splitLines(text).some((line) => isMarker(line) || isInitLine(line))) return "present";
 
   const eol = text.includes("\r\n") || !text.includes("\n") ? "\r\n" : "\n";
   const body = stripBom(text);
@@ -82,8 +89,10 @@ export function addToProfile(profilePath: string, bin: string): "added" | "prese
 
 /**
  * Remove the marker line and the init line after it, keeping everything else
- * byte for byte. The line after the marker goes only if it is an init line:
- * one the user wrote there instead is not ours to delete. False when the
+ * byte for byte. The line after the marker goes only if it is a shellwise
+ * init line: one the user wrote there instead is not ours to delete. A
+ * profile left with nothing but blank lines is deleted: an empty .ps1 still
+ * fails to load where the execution policy blocks scripts. False when the
  * profile is missing or has no marker (the file is then not written).
  */
 export function removeFromProfile(profilePath: string): boolean {
@@ -100,26 +109,55 @@ export function removeFromProfile(profilePath: string): boolean {
     removed = true;
     // A BOM sits in front of the first line: keep it.
     if (lines[i].startsWith(UTF8_BOM)) kept.push(UTF8_BOM);
-    if (/ init powershell\b/.test(lines[i + 1] ?? "")) i++;
+    if (isInitLine(lines[i + 1] ?? "")) i++;
   }
   if (!removed) return false;
-  writeFileSync(profilePath, encode(kept.join("")));
+  const rest = kept.join("");
+  if (stripBom(rest).trim() === "") {
+    unlinkSync(profilePath);
+  } else {
+    writeFileSync(profilePath, encode(rest));
+  }
   return true;
 }
 
-/** Ask a PowerShell for its current-user, current-host profile path; null if it cannot say. */
-export function powershellProfile(shellPath: string): string | null {
+export interface ShellProfile {
+  /** $PROFILE.CurrentUserCurrentHost */
+  profile: string;
+  /** The effective execution policy of a fresh session; "" if it gave none. */
+  policy: string;
+}
+
+/** Policies under which a shell loads an unsigned, locally written profile. */
+const LOADS_PROFILE = new Set(["RemoteSigned", "Unrestricted", "Bypass"]);
+
+/**
+ * Ask a PowerShell for its current-user, current-host profile path and its
+ * own effective execution policy; null if it cannot say.
+ */
+export function powershellProfile(shellPath: string, parentEnv: NodeJS.ProcessEnv = process.env): ShellProfile | null {
+  // Not inherited: PSExecutionPolicyPreference carries a parent's
+  // -ExecutionPolicy down (the Process scope), and pwsh's PSModulePath keeps
+  // 5.1 from loading Get-ExecutionPolicy at all.
+  const env = Object.fromEntries(
+    Object.entries(parentEnv).filter(([key]) => !/^(PSExecutionPolicyPreference|PSModulePath)$/i.test(key))
+  );
   // Base64 of the UTF-8 bytes: the path may hold letters the console code
   // page cannot carry through a pipe.
-  const command = "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PROFILE.CurrentUserCurrentHost))";
+  // A policy it cannot read leaves the second line empty, not the profile unknown.
+  const command =
+    '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PROFILE.CurrentUserCurrentHost)); try { "$(Get-ExecutionPolicy)" } catch { "" }';
   try {
     const p = Bun.spawnSync([shellPath, "-NoProfile", "-NonInteractive", "-Command", command], {
+      env,
       stdin: "ignore",
       stderr: "ignore",
       timeout: 30_000,
     });
-    const path = p.exitCode === 0 ? Buffer.from(p.stdout.toString().trim(), "base64").toString("utf8") : "";
-    return path === "" ? null : path;
+    if (p.exitCode !== 0) return null;
+    const [encoded = "", policy = ""] = p.stdout.toString().trim().split(/\r?\n/);
+    const profile = Buffer.from(encoded.trim(), "base64").toString("utf8");
+    return profile === "" ? null : { profile, policy: policy.trim() };
   } catch {
     return null;
   }
@@ -127,10 +165,12 @@ export function powershellProfile(shellPath: string): string | null {
 
 export interface HookDeps {
   platform: NodeJS.Platform;
+  /** The directory of the package this hook belongs to. */
+  packageDir: string;
   /** Resolve a command on PATH, as Bun.which. */
   which: (command: string) => string | null;
-  /** A PowerShell's profile path, from its executable's path. */
-  profileOf: (shellPath: string) => string | null;
+  /** A PowerShell's profile path and execution policy, from its executable's path. */
+  profileOf: (shellPath: string) => ShellProfile | null;
   daemon: (action: "start" | "stop") => void;
   /** Run a POSIX install script with inherited stdio, ignoring failure. */
   runScript: (scriptPath: string) => void;
@@ -139,8 +179,9 @@ export interface HookDeps {
 
 const defaultDeps: HookDeps = {
   platform: process.platform,
+  packageDir: join(import.meta.dir, ".."),
   which: (command) => Bun.which(command),
-  profileOf: powershellProfile,
+  profileOf: (shellPath) => powershellProfile(shellPath),
   daemon: (action) => {
     // This package's own CLI, run by the bun running this hook: no PATH
     // lookup that could find another install or a .cmd shim.
@@ -153,6 +194,12 @@ const defaultDeps: HookDeps = {
 };
 
 function runWindows(action: "setup" | "uninstall", deps: HookDeps): void {
+  // A checkout or worktree (`bun install` / `npm install` there) is no
+  // install at all: only a package under a node_modules segment (a global or
+  // dependency install) may touch the user's profiles or daemon. Otherwise a
+  // global shellwise on PATH would let the checkout's code run as the daemon.
+  if (!/(^|[\\/])node_modules([\\/]|$)/i.test(deps.packageDir)) return;
+
   // Same rule as setup.sh: shellwise not on PATH, or found in a project's
   // node_modules\.bin (npm and bun put it on PATH for this hook), means a
   // local install, which gets no shell integration. Uninstall stops only for
@@ -165,16 +212,37 @@ function runWindows(action: "setup" | "uninstall", deps: HookDeps): void {
   }
   if (local) return;
 
+  const manual = `  ${initLine("shellwise")}`;
+  let changed = false;
   for (const shell of ["pwsh", "powershell"]) {
     const shellPath = deps.which(shell);
     if (shellPath === null) continue;
-    const profile = deps.profileOf(shellPath);
-    if (profile === null) continue;
+    const info = deps.profileOf(shellPath);
+    if (info === null) {
+      if (action === "setup") deps.log(`[shellwise] Could not find ${shell}'s profile. Add this line to it:\n${manual}`);
+      continue;
+    }
+    const { profile, policy } = info;
     try {
       if (action === "setup") {
-        const result = addToProfile(profile, "shellwise");
-        deps.log(result === "added" ? `[shellwise] Added to ${profile}` : `[shellwise] Already configured in ${profile}`);
+        // A profile the shell refuses to load (Restricted, AllSigned, or no
+        // answer) would print an error at every start: leave it to the user.
+        // Removal below is never gated: it can only make loading succeed.
+        if (!LOADS_PROFILE.has(policy)) {
+          deps.log(
+            `[shellwise] ${shell} does not run scripts (execution policy: ${policy || "unknown"}), so ${profile} was left alone.\n` +
+              `  To enable: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned, then add this line to that profile:\n${manual}`
+          );
+          continue;
+        }
+        if (addToProfile(profile, "shellwise") === "added") {
+          changed = true;
+          deps.log(`[shellwise] Added to ${profile}`);
+        } else {
+          deps.log(`[shellwise] Already configured in ${profile}`);
+        }
       } else if (removeFromProfile(profile)) {
+        changed = true;
         deps.log(`[shellwise] Removed from ${profile}`);
       }
     } catch (e) {
@@ -185,11 +253,13 @@ function runWindows(action: "setup" | "uninstall", deps: HookDeps): void {
   try {
     deps.daemon(action === "setup" ? "start" : "stop");
   } catch {}
-  deps.log(
-    action === "setup"
-      ? "[shellwise] Restart PowerShell or run: . $PROFILE"
-      : "[shellwise] Uninstalled. Restart PowerShell to complete."
-  );
+  if (changed) {
+    deps.log(
+      action === "setup"
+        ? "[shellwise] Restart PowerShell or run: . $PROFILE"
+        : "[shellwise] Uninstalled. Restart PowerShell to complete."
+    );
+  }
 }
 
 /** Run the hook for `action`; never throws. */

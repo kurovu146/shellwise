@@ -2,23 +2,22 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { basename, dirname, join } from "path";
+import { dirname, join } from "path";
 import {
   drive,
   killTree,
   removeDir,
   startHiddenConsole,
   startPseudoConsole,
+  TEST_BIN,
   waitForExit,
   type Step,
 } from "./console-harness";
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
-// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
-// binary, and puts its dir on the shells' PATH instead of a .cmd shim.
-const TEST_BIN = process.env.SW_TEST_BIN;
-if (TEST_BIN && basename(TEST_BIN).toLowerCase() !== "shellwise.exe") throw new Error("SW_TEST_BIN must name a shellwise.exe");
+// SW_TEST_BIN (see console-harness.ts) runs a compiled binary instead, with
+// its dir on the shells' PATH in place of the .cmd shim.
 const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 // A shell plus PSReadLine starting cold, then several commands that each spawn bun.
 const TEST_TIMEOUT_MS = 60_000;

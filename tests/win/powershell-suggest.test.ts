@@ -4,15 +4,13 @@ import { mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSyn
 import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { HELPER_HASH } from "../../src/cli/init/powershell-helper.cs";
-import { drive, killTree, removeDir, startHiddenConsole, waitForExit, type Step } from "./console-harness";
+import { drive, killTree, removeDir, startHiddenConsole, TEST_BIN, waitForExit, type Step } from "./console-harness";
 import { daemonPids as findDaemonPids } from "../daemon/daemon-processes";
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
-// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
-// binary, and puts its dir on the shell's PATH instead of a .cmd shim.
-const TEST_BIN = process.env.SW_TEST_BIN;
-if (TEST_BIN && basename(TEST_BIN).toLowerCase() !== "shellwise.exe") throw new Error("SW_TEST_BIN must name a shellwise.exe");
+// SW_TEST_BIN (see console-harness.ts) runs a compiled binary instead, with
+// its dir on the shell's PATH in place of the .cmd shim.
 const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 // A cold pwsh with PSReadLine, plus compiling the helper on first load.
 const TEST_TIMEOUT_MS = 60_000;

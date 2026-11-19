@@ -16,8 +16,8 @@
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/sw",
     "test": "bun test",
-    "postinstall": "bun scripts/install-hook.ts setup || exit 0",
-    "preuninstall": "bun scripts/install-hook.ts uninstall || exit 0"
+    "postinstall": "bun scripts/install-hook.ts setup || node -e \"process.platform==='win32'||require('child_process').spawnSync('bash',['scripts/setup.sh'],{stdio:'inherit'})\" || exit 0",
+    "preuninstall": "bun scripts/install-hook.ts uninstall || node -e \"process.platform==='win32'||require('child_process').spawnSync('bash',['scripts/uninstall.sh'],{stdio:'inherit'})\" || exit 0"
   },
   "keywords": [
     "shell",

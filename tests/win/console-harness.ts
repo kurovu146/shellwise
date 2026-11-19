@@ -1,13 +1,31 @@
 // Windows end-to-end harness: run a program in its own hidden console, drive
 // it with tests/win/console-driver.ts, and clean up after it.
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, isAbsolute, join } from "path";
 import type { Screen, Step } from "./console-driver";
 
 export type { KeyName, Screen, Step } from "./console-driver";
 
 const DRIVER = join(import.meta.dir, "console-driver.ts");
+
+/**
+ * SW_TEST_BIN=<absolute path to a compiled shellwise.exe>: the e2e suites run
+ * the CLI from that binary (and put its dir on the shells' PATH) instead of
+ * `bun src/index.ts`. Anything else fails loudly: a relative path would let
+ * another shellwise on PATH answer, and a stale value would test an old
+ * binary without saying so.
+ */
+export const TEST_BIN = testBin(process.env.SW_TEST_BIN);
+
+function testBin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (!isAbsolute(value) || !existsSync(value) || !statSync(value).isFile() || basename(value).toLowerCase() !== "shellwise.exe") {
+    throw new Error(`SW_TEST_BIN must be the absolute path of an existing shellwise.exe, got: ${value}`);
+  }
+  console.log(`[e2e] SW_TEST_BIN: running the CLI from ${value}`);
+  return value;
+}
 
 /** Quote one argument for a Windows command line (CommandLineToArgvW rules). */
 function quoteArg(arg: string): string {

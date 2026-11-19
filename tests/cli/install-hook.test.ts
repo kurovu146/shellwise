@@ -123,6 +123,17 @@ describe("addToProfile", () => {
     expect(bytes(`${p}.shellwise-backup`).equals(backup)).toBe(true);
   });
 
+  test("a hand-written init line without the marker counts as present; a commented-out one does not", () => {
+    const own = profileWith("Import-Module posh-git\r\nshellwise init powershell | Out-String | Invoke-Expression\r\n");
+    const before = bytes(own);
+    expect(addToProfile(own, "shellwise")).toBe("present");
+    expect(bytes(own).equals(before)).toBe(true);
+    expect(existsSync(`${own}.shellwise-backup`)).toBe(false);
+
+    const commented = profileWith("# shellwise init powershell | Out-String | Invoke-Expression\r\n", "commented.ps1");
+    expect(addToProfile(commented, "shellwise")).toBe("added");
+  });
+
   test("finds the block in the middle of other content, in UTF-16LE too", () => {
     const text = `a\r\n${BLOCK_CRLF}b\r\n`;
     const p = profileWith(Buffer.concat([UTF16LE_BOM, Buffer.from(text, "utf16le")]));
@@ -176,6 +187,31 @@ describe("removeFromProfile", () => {
     expect(bytes(p).toString("latin1")).toBe("Import-Module posh-git\r\n");
   });
 
+  test("leaves another tool's init line after the marker: only a shellwise or sw init line is ours", () => {
+    const zoxide = "Invoke-Expression (& { (zoxide init powershell | Out-String) })";
+    const starship = "Invoke-Expression (&starship init powershell)";
+    const p = profileWith(`${MARKER}\r\n${zoxide}\r\n${MARKER}\r\n${starship}\r\n`);
+    expect(removeFromProfile(p)).toBe(true);
+    expect(bytes(p).toString("latin1")).toBe(`${zoxide}\r\n${starship}\r\n`);
+
+    const sw = profileWith(`a\r\n${MARKER}\r\nsw init powershell | Out-String | Invoke-Expression\r\n`, "sw.ps1");
+    expect(removeFromProfile(sw)).toBe(true);
+    expect(bytes(sw).toString("latin1")).toBe("a\r\n");
+  });
+
+  test("deletes a profile that holds nothing but the block", () => {
+    for (const [name, content] of [
+      ["plain.ps1", BLOCK_CRLF],
+      ["blank-lines.ps1", `\r\n \r\n${BLOCK_CRLF}\r\n`],
+      ["utf8-bom.ps1", Buffer.concat([UTF8_BOM, Buffer.from(BLOCK_CRLF)])],
+      ["utf16.ps1", Buffer.concat([UTF16LE_BOM, Buffer.from(BLOCK_CRLF, "utf16le")])],
+    ] as const) {
+      const p = profileWith(content, name);
+      expect(removeFromProfile(p)).toBe(true);
+      expect(existsSync(p)).toBe(false);
+    }
+  });
+
   test("add and remove can repeat without the profile growing", () => {
     const p = profileWith("a\r\n");
     addToProfile(p, "shellwise");
@@ -188,31 +224,38 @@ describe("removeFromProfile", () => {
 });
 
 describe("runHook", () => {
-  /** Fake deps: two shells with temp profiles, every call recorded. */
+  const GLOBAL_PACKAGE = "C:\\Users\\me\\.bun\\install\\global\\node_modules\\shellwise";
+  const PWSH = "C:\\pwsh\\pwsh.exe";
+  const WINPS = "C:\\Windows\\powershell.exe";
+
+  /** Fake deps: two shells with temp profiles, every call and log line recorded. */
   function fakeDeps(over: Partial<HookDeps> = {}) {
     const calls: string[] = [];
+    const logs: string[] = [];
     const profiles: Record<string, string> = {
-      "C:\\pwsh\\pwsh.exe": join(dir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"),
-      "C:\\Windows\\powershell.exe": join(dir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
+      [PWSH]: join(dir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"),
+      [WINPS]: join(dir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1"),
     };
+    const policies: Record<string, string> = { [PWSH]: "RemoteSigned", [WINPS]: "RemoteSigned" };
     const shells: Record<string, string> = {
       shellwise: "C:\\Users\\me\\.bun\\bin\\shellwise.exe",
-      pwsh: "C:\\pwsh\\pwsh.exe",
-      powershell: "C:\\Windows\\powershell.exe",
+      pwsh: PWSH,
+      powershell: WINPS,
     };
     const deps: HookDeps = {
       platform: "win32",
+      packageDir: GLOBAL_PACKAGE,
       which: (cmd) => shells[cmd] ?? null,
       profileOf: (shell) => {
         calls.push(`profileOf ${shell}`);
-        return profiles[shell] ?? null;
+        return profiles[shell] ? { profile: profiles[shell], policy: policies[shell] } : null;
       },
       daemon: (action) => calls.push(`daemon ${action}`),
       runScript: (script) => calls.push(`script ${script}`),
-      log: () => {},
+      log: (message) => logs.push(message),
       ...over,
     };
-    return { deps, calls, profiles, shells };
+    return { deps, calls, logs, profiles, policies, shells };
   }
 
   test("on Linux and macOS runs setup.sh / uninstall.sh and nothing else", () => {
@@ -228,17 +271,18 @@ describe("runHook", () => {
   });
 
   test("on Windows setup adds the block to each shell's profile, then starts the daemon", () => {
-    const { deps, calls, profiles } = fakeDeps();
+    const { deps, calls, logs, profiles } = fakeDeps();
     runHook("setup", deps);
     for (const p of Object.values(profiles)) {
       expect(bytes(p).toString("latin1")).toBe(BLOCK_CRLF);
     }
     expect(calls.at(-1)).toBe("daemon start");
     expect(calls.filter((c) => c.startsWith("daemon"))).toEqual(["daemon start"]);
+    expect(logs.at(-1)).toContain("Restart PowerShell");
   });
 
   test("on Windows uninstall removes the block from each profile, then stops the daemon", () => {
-    const { deps, calls, profiles } = fakeDeps();
+    const { deps, calls, logs, profiles } = fakeDeps();
     for (const p of Object.values(profiles)) {
       mkdirSync(join(p, ".."), { recursive: true });
       writeFileSync(p, `a\r\n\r\n${BLOCK_CRLF}b\r\n`);
@@ -248,6 +292,64 @@ describe("runHook", () => {
       expect(bytes(p).toString("latin1")).toBe("a\r\n\r\nb\r\n");
     }
     expect(calls.at(-1)).toBe("daemon stop");
+    expect(logs.at(-1)).toContain("Uninstalled");
+  });
+
+  test("on Windows setup leaves the profile of a shell whose policy blocks scripts alone and prints the line to add", () => {
+    for (const policy of ["Restricted", "AllSigned", "Undefined", ""]) {
+      const { deps, calls, logs, profiles, policies } = fakeDeps();
+      policies[WINPS] = policy;
+      // An existing profile is left as it is too: no block, no backup.
+      mkdirSync(join(profiles[WINPS], ".."), { recursive: true });
+      writeFileSync(profiles[WINPS], "Set-Alias ll Get-ChildItem\r\n");
+      runHook("setup", deps);
+      expect(bytes(profiles[WINPS]).toString("latin1")).toBe("Set-Alias ll Get-ChildItem\r\n");
+      expect(existsSync(`${profiles[WINPS]}.shellwise-backup`)).toBe(false);
+      expect(bytes(profiles[PWSH]).toString("latin1")).toBe(BLOCK_CRLF);
+      expect(logs.join("\n")).toContain(INIT);
+      expect(calls.at(-1)).toBe("daemon start");
+      rmSync(join(dir, "Documents"), { recursive: true, force: true });
+    }
+  });
+
+  test("on Windows setup creates no profile for a shell whose policy blocks scripts", () => {
+    for (const policy of ["Unrestricted", "Bypass", "Restricted"]) {
+      const { deps, profiles, policies } = fakeDeps();
+      policies[WINPS] = policy;
+      runHook("setup", deps);
+      expect(existsSync(profiles[WINPS])).toBe(policy !== "Restricted");
+      rmSync(join(dir, "Documents"), { recursive: true, force: true });
+    }
+  });
+
+  test("on Windows uninstall still removes the block under a blocking policy, and deletes a profile left empty", () => {
+    const { deps, profiles, policies } = fakeDeps();
+    policies[WINPS] = "Restricted";
+    mkdirSync(join(profiles[WINPS], ".."), { recursive: true });
+    writeFileSync(profiles[WINPS], BLOCK_CRLF);
+    runHook("uninstall", deps);
+    expect(existsSync(profiles[WINPS])).toBe(false);
+  });
+
+  test("on Windows a checkout (the hook's package is not under node_modules) is left alone", () => {
+    for (const packageDir of ["C:\\work\\shellwise", "C:\\work\\my_node_modules\\shellwise", "C:\\node_modules2\\shellwise"]) {
+      for (const action of ["setup", "uninstall"]) {
+        const { deps, calls, logs, profiles } = fakeDeps({ packageDir });
+        runHook(action, deps);
+        expect(calls).toEqual([]);
+        expect(logs).toEqual([]);
+        for (const p of Object.values(profiles)) expect(existsSync(p)).toBe(false);
+      }
+    }
+  });
+
+  test("on Windows a package under a node_modules segment (either separator, any case) is set up", () => {
+    for (const packageDir of ["C:\\Users\\me\\AppData\\Roaming\\npm\\Node_Modules\\shellwise", "C:/a/node_modules/shellwise"]) {
+      const { deps, profiles } = fakeDeps({ packageDir });
+      runHook("setup", deps);
+      expect(existsSync(profiles[PWSH])).toBe(true);
+      rmSync(join(dir, "Documents"), { recursive: true, force: true });
+    }
   });
 
   test("on Windows a local install (shellwise resolves into node_modules\\.bin) touches nothing", () => {
@@ -272,9 +374,9 @@ describe("runHook", () => {
     const { deps, calls, shells, profiles } = fakeDeps();
     delete shells.powershell;
     runHook("setup", deps);
-    expect(calls).toEqual(["profileOf C:\\pwsh\\pwsh.exe", "daemon start"]);
-    expect(bytes(profiles["C:\\pwsh\\pwsh.exe"]).toString("latin1")).toBe(BLOCK_CRLF);
-    expect(existsSync(profiles["C:\\Windows\\powershell.exe"])).toBe(false);
+    expect(calls).toEqual([`profileOf ${PWSH}`, "daemon start"]);
+    expect(bytes(profiles[PWSH]).toString("latin1")).toBe(BLOCK_CRLF);
+    expect(existsSync(profiles[WINPS])).toBe(false);
   });
 
   test("on Windows skips shells that report no profile and still starts the daemon", () => {
@@ -283,12 +385,29 @@ describe("runHook", () => {
     expect(calls).toEqual(["daemon start"]);
   });
 
+  test("on Windows prints no closing message when nothing changed", () => {
+    const setup = fakeDeps({ profileOf: () => null });
+    runHook("setup", setup.deps);
+    expect(setup.logs.join("\n")).not.toContain("Restart PowerShell");
+
+    const present = fakeDeps();
+    runHook("setup", present.deps);
+    present.logs.length = 0;
+    runHook("setup", present.deps);
+    expect(present.logs.join("\n")).not.toContain("Restart PowerShell");
+
+    rmSync(join(dir, "Documents"), { recursive: true, force: true });
+    const uninstall = fakeDeps();
+    runHook("uninstall", uninstall.deps);
+    expect(uninstall.logs.join("\n")).not.toContain("Uninstalled");
+  });
+
   test("on Windows a profile that cannot be written does not stop the other shell or the daemon", () => {
     const { deps, calls, profiles } = fakeDeps();
     // pwsh's profile path is a directory: reading it fails.
-    mkdirSync(profiles["C:\\pwsh\\pwsh.exe"], { recursive: true });
+    mkdirSync(profiles[PWSH], { recursive: true });
     expect(() => runHook("setup", deps)).not.toThrow();
-    expect(bytes(profiles["C:\\Windows\\powershell.exe"]).toString("latin1")).toBe(BLOCK_CRLF);
+    expect(bytes(profiles[WINPS]).toString("latin1")).toBe(BLOCK_CRLF);
     expect(calls.at(-1)).toBe("daemon start");
   });
 
@@ -300,15 +419,98 @@ describe("runHook", () => {
 });
 
 describe.skipIf(process.platform !== "win32")("powershellProfile", () => {
-  // Read-only: asks each installed shell for its profile path.
+  const POLICY = /^(Restricted|AllSigned|RemoteSigned|Unrestricted|Bypass)$/;
+  /** The parent's env without what a shell hands its children: what a fresh shell reports. */
+  const ownEnv = () =>
+    Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(PSExecutionPolicyPreference|PSModulePath)$/i.test(k)));
+
+  // Read-only: asks each installed shell for its profile path and policy.
   for (const shell of ["pwsh", "powershell"]) {
     const path = Bun.which(shell);
-    test.skipIf(path === null)(`asks ${shell} for its current-user, current-host profile`, () => {
-      const profile = powershellProfile(path!);
-      expect(profile).toMatch(/[\\/](PowerShell|WindowsPowerShell)[\\/]Microsoft\.PowerShell_profile\.ps1$/);
-      expect(profile).toContain(shell === "pwsh" ? "\\PowerShell\\" : "\\WindowsPowerShell\\");
-    });
+    test.skipIf(path === null)(
+      `asks ${shell} for its current-user, current-host profile and its own execution policy`,
+      () => {
+        const own = Bun.spawnSync([path!, "-NoProfile", "-NonInteractive", "-Command", "Get-ExecutionPolicy"], { env: ownEnv() })
+          .stdout.toString()
+          .trim();
+        expect(own).toMatch(POLICY);
+        // A parent run with -ExecutionPolicy passes it down in
+        // PSExecutionPolicyPreference, and pwsh passes its PSModulePath, which
+        // keeps 5.1 from loading Get-ExecutionPolicy at all.
+        const inherited = own === "AllSigned" ? "Bypass" : "AllSigned";
+        const info = powershellProfile(path!, { ...process.env, PSExecutionPolicyPreference: inherited });
+        expect(info?.profile).toMatch(/[\\/](PowerShell|WindowsPowerShell)[\\/]Microsoft\.PowerShell_profile\.ps1$/);
+        expect(info?.profile).toContain(shell === "pwsh" ? "\\PowerShell\\" : "\\WindowsPowerShell\\");
+        expect(info?.policy).toBe(own);
+      },
+      30_000
+    );
   }
+
+  test("reports nothing for a program that is not a PowerShell", () => {
+    expect(powershellProfile(join(dir, "missing.exe"))).toBeNull();
+  }, 30_000);
+});
+
+describe("the package.json hook lines", () => {
+  const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "package.json"), "utf8"));
+  const fallback = (action: string, script: string) =>
+    `bun scripts/install-hook.ts ${action} || node -e "process.platform==='win32'||require('child_process').spawnSync('bash',['scripts/${script}'],{stdio:'inherit'})" || exit 0`;
+
+  test("run the hook, fall back to the POSIX script through node when bun is missing, and never fail", () => {
+    expect(pkg.scripts.postinstall).toBe(fallback("setup", "setup.sh"));
+    expect(pkg.scripts.preuninstall).toBe(fallback("uninstall", "uninstall.sh"));
+  });
+
+  const node = Bun.which("node");
+  // On Windows Git's bash is often installed but not on PATH.
+  const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+  const bash = Bun.which("bash") ?? (process.platform === "win32" && existsSync(gitBash) ? gitBash : null);
+
+  /**
+   * Run `line` the way npm does (cmd.exe /d /s /c on Windows, sh -c
+   * elsewhere) in a package whose scripts/setup.sh only records that it ran
+   * and fails, with a PATH that has node (and bash) but no bun.
+   */
+  function runLine(line: string) {
+    const pkgDir = join(dir, "pkg");
+    mkdirSync(join(pkgDir, "scripts"), { recursive: true });
+    writeFileSync(join(pkgDir, "scripts", "setup.sh"), `echo ran > "${join(pkgDir, "ran.txt").replace(/\\/g, "/")}"\nexit 3\n`);
+    const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+    const dirs = [node!, bash!].map((p) => join(p, ".."));
+    if (process.platform !== "win32") dirs.push("/usr/bin", "/bin");
+    const PATH = [...new Set(dirs)].join(process.platform === "win32" ? ";" : ":");
+    expect(Bun.which("bun", { PATH })).toBeNull();
+    const env = { ...process.env, [pathKey]: PATH };
+    const p =
+      process.platform === "win32"
+        ? Bun.spawnSync([process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"${line}"`], {
+            cwd: pkgDir,
+            env,
+            windowsVerbatimArguments: true,
+          })
+        : Bun.spawnSync(["sh", "-c", line], { cwd: pkgDir, env });
+    return { exitCode: p.exitCode, ran: existsSync(join(pkgDir, "ran.txt")) };
+  }
+
+  // On Windows bash is on that PATH too: available, it must still not run.
+  test.skipIf(node === null || bash === null)(
+    "without bun: bash setup.sh runs on POSIX, nothing runs on Windows, and the line exits 0",
+    () => {
+      expect(runLine(pkg.scripts.postinstall)).toEqual({ exitCode: 0, ran: process.platform !== "win32" });
+    },
+    30_000
+  );
+
+  test.skipIf(process.platform !== "win32" || node === null || bash === null)(
+    "on Windows the same line with the platform test made false does reach bash (the fallback is wired)",
+    () => {
+      const line = pkg.scripts.postinstall.replace("process.platform==='win32'", "false");
+      expect(line).not.toBe(pkg.scripts.postinstall);
+      expect(runLine(line)).toEqual({ exitCode: 0, ran: true });
+    },
+    30_000
+  );
 });
 
 describe.skipIf(process.platform !== "win32")("a profile written by addToProfile, loaded by each PowerShell", () => {

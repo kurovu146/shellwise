@@ -7,6 +7,7 @@ import {
   killTree,
   removeDir,
   startHiddenConsole,
+  TEST_BIN,
   waitForExit,
   type KeyName,
   type Screen,
@@ -15,9 +16,8 @@ import {
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
-// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
-// binary instead of `bun src/index.ts`.
-const CLI = process.env.SW_TEST_BIN ? [process.env.SW_TEST_BIN] : [process.execPath, ENTRY];
+// SW_TEST_BIN (see console-harness.ts) runs a compiled binary instead.
+const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 const GIT_COMMANDS = ["git status", "git stash pop"];
 // Each test starts a console, a CLI and a driver; the driver polls for up to 10s.
 const TEST_TIMEOUT_MS = 30_000;
