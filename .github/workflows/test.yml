@@ -33,4 +33,5 @@ jobs:
         run: brew install fish
       - name: Show detected tools
         run: bun -e "console.log(Object.fromEntries(['zsh','fish','tmux','sh'].map(t => [t, Bun.which(t)])))"
+      - run: bunx tsc --noEmit
       - run: bun test

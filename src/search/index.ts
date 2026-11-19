@@ -1,6 +1,6 @@
 import { fuzzyMatch } from "./fuzzy";
 import { rankResults, type ScoredResult } from "./scorer";
-import { searchCommands, type CommandStats } from "../db/queries";
+import { searchCommands } from "../db/queries";
 import { getDb } from "../db/connection";
 
 export type { ScoredResult } from "./scorer";

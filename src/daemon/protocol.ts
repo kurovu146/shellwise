@@ -9,6 +9,9 @@
  * read as its continuation.
  */
 
+import { tmpdir, userInfo } from "os";
+import { join } from "path";
+
 export type RequestType = "SUGGEST" | "ADD" | "STOP" | "PING";
 
 export interface SuggestRequest {
@@ -113,12 +116,40 @@ export function formatSuggestResponse(
   return lines.join("\n") + "\n\n";
 }
 
+export function endpointPaths(env: {
+  platform: NodeJS.Platform;
+  uid?: number;
+  pid: number;
+  username: string;
+  tmpdir: string;
+}): { socket: string; pid: string } {
+  if (env.platform === "win32") {
+    // %TEMP% is per-user and ACL-protected; chmod means nothing on Windows.
+    const user = env.username.replace(/[^A-Za-z0-9_-]/g, "_") || "user";
+    const base = join(env.tmpdir, `shellwise-${user}`);
+    return { socket: `${base}.sock`, pid: `${base}.pid` };
+  }
+  const base = `/tmp/shellwise-${env.uid ?? env.pid}`;
+  return { socket: `${base}.sock`, pid: `${base}.pid` };
+}
+
+// SHELLWISE_SOCKET is an internal test-isolation hook, not a user setting.
+function currentEndpoint(): { socket: string; pid: string } {
+  const override = process.env.SHELLWISE_SOCKET;
+  if (override) return { socket: override, pid: override.replace(/.sock$/, "") + ".pid" };
+  return endpointPaths({
+    platform: process.platform,
+    uid: process.getuid?.(),
+    pid: process.pid,
+    username: process.platform === "win32" ? userInfo().username : "",
+    tmpdir: tmpdir(),
+  });
+}
+
 export function getSocketPath(): string {
-  const uid = process.getuid?.() ?? process.pid;
-  return `/tmp/shellwise-${uid}.sock`;
+  return currentEndpoint().socket;
 }
 
 export function getPidPath(): string {
-  const uid = process.getuid?.() ?? process.pid;
-  return `/tmp/shellwise-${uid}.pid`;
+  return currentEndpoint().pid;
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { existsSync } from "fs";
 import { runAdd } from "./cli/add";
 import { runSearch, pickCommand } from "./cli/search";
 import { runSuggest } from "./cli/suggest";
@@ -13,6 +14,8 @@ import { closeDb } from "./db/connection";
 import { checkForUpdate } from "./utils/update-check";
 import { startServer, isDaemonRunning, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
+import { getSocketPath } from "./daemon/protocol";
+import { selfCommand } from "./utils/self";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -155,20 +158,21 @@ async function main(): Promise<void> {
               return;
             }
             // Fork to background — respawn THIS executable, never a PATH
-            // lookup (which could resolve to a different install). Compiled
-            // binaries report a virtual /$bunfs Bun.main and a real execPath;
-            // script mode is the reverse (execPath is the bun runtime).
-            const self = Bun.main.startsWith("/$bunfs")
-              ? [process.execPath]
-              : [process.execPath, Bun.main];
-            const proc = Bun.spawn([...self, "daemon", "_run"], {
+            // lookup (which could resolve to a different install).
+            const proc = Bun.spawn([...selfCommand(), "daemon", "_run"], {
               stdio: ["ignore", "ignore", "ignore"],
+              windowsHide: true,
               // @ts-ignore - Bun supports detached
               detached: true,
             });
             proc.unref();
-            // Wait a bit and verify
-            await new Promise((r) => setTimeout(r, 200));
+            // Poll until the daemon is reachable (up to 3s): a cold start on
+            // Windows is slower than a fixed 200ms guess.
+            const deadline = Date.now() + 3000;
+            while (Date.now() < deadline) {
+              if (isDaemonRunning() && existsSync(getSocketPath())) break;
+              await new Promise((r) => setTimeout(r, 50));
+            }
             if (isDaemonRunning()) {
               const info = getDaemonInfo();
               console.log(`Daemon started (pid: ${info?.pid})`);
@@ -188,6 +192,12 @@ async function main(): Promise<void> {
               return;
             }
             await daemonRequest("STOP\n");
+            // The daemon exits ~50ms after replying; wait for it so `stop` means
+            // stopped (a following `status` or restart must not race it).
+            const stopDeadline = Date.now() + 3000;
+            while (isDaemonRunning() && Date.now() < stopDeadline) {
+              await new Promise((r) => setTimeout(r, 50));
+            }
             console.log("Daemon stopped.");
             break;
           }
