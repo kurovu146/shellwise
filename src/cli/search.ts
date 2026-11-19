@@ -46,11 +46,11 @@ export function pickCommand(initialQuery: string = ""): string | null {
 
   const cleanup = () => {
     // After render() the cursor sits on the frame's first line (the search
-    // box), so clearing down from here wipes exactly the UI — moving up
-    // first would erase scrollback content above the frame.
+    // box), so clearing down from its column 1 wipes exactly the UI — moving
+    // up first would erase scrollback content above the frame.
+    write(moveCursorToColumn(1));
     write(clearDown());
     write(showCursor());
-    write(moveCursorToColumn(1));
     disableRawMode();
     closeTtyInput();
     closeTty();
@@ -218,9 +218,10 @@ function render(state: SearchState): void {
   const visibleCount = getVisibleCount();
   const totalLines = visibleCount + 4; // search box + 2 separators + status bar
 
-  // Move up to clear previous render
+  // The previous paint left the cursor on the frame's first row (at the
+  // search box's cursor column), so repaint from column 1 of that same row.
   if (state.renderedLines > 0) {
-    write(moveCursorUp(state.renderedLines));
+    write(moveCursorToColumn(1));
   } else {
     // First paint: reserve the frame's height up-front so any terminal
     // scrolling happens now. Painting first and moving up after would leave

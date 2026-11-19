@@ -96,11 +96,12 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
 
   /**
    * Start `search --query git` in a hidden console, stdout/stderr to files.
-   * `before` lines run first in the same console (e.g. `mode con:`).
+   * `before` lines run first in the same console (e.g. `mode con:`), and
+   * `after` lines once the search has exited.
    */
-  function startSearch(before: string[] = []): number {
+  function startSearch(before: string[] = [], after: string[] = []): number {
     const run = `@"${process.execPath}" "${ENTRY}" search --query git > "${file("selected.txt")}" 2> "${file("err.txt")}"`;
-    writeFileSync(file("run.cmd"), [...before, run].join("\r\n") + "\r\n");
+    writeFileSync(file("run.cmd"), [...before, run, ...after].join("\r\n") + "\r\n");
     pid = startHiddenConsole("cmd.exe", ["/c", file("run.cmd")], env);
     return pid;
   }
@@ -172,6 +173,45 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
     expect(moved).not.toBe(first);
 
     expect(read("selected.txt")).toBe(moved!);
+    expect(read("err.txt")).toBe("");
+  }, TEST_TIMEOUT_MS);
+
+  test("redraws in place under earlier output and leaves that output intact", () => {
+    const markers = Array.from({ length: 10 }, (_, i) => `marker ${i + 1}`);
+    // 10 marker rows + the 19-row frame fit a 30-row console without scrolling;
+    // `pause` keeps the console open after the CLI exits, to read it once more.
+    const p = startSearch(["@mode con: cols=120 lines=30", ...markers.map((m) => `@echo ${m}`)], ["@pause >nul"]);
+    const redraws = ["open", "down 1", "down 2", "down 3", "typed"];
+    const screens = driveSearch(p, [
+      { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
+      { type: "screen", label: "open" },
+      ...[1, 2, 3].flatMap((n): Step[] => [
+        { type: "key", value: "down" },
+        { type: "waitForChange" },
+        { type: "screen", label: `down ${n}` },
+      ]),
+      { type: "text", value: "s" },
+      { type: "waitForChange" },
+      { type: "screen", label: "typed" },
+      { type: "key", value: "enter" },
+      { type: "waitForChange" },
+      { type: "screen", label: "after" },
+    ]);
+    const rows = (label: string) => screens.find((s) => s.label === label)!.rows;
+
+    for (const label of redraws) {
+      const r = rows(label);
+      // The output above the frame is untouched...
+      expect(r.slice(0, 10)).toEqual(markers);
+      // ...the frame starts right under it, on the same row every time...
+      expect(r.findIndex((row) => /^\s*> gits?$/.test(row))).toBe(10);
+      // ...and the search box starts at column 1, with no drift.
+      expect(r[10]).toMatch(/^> gits?$/);
+      expect(r[11]).toBe("─".repeat(120));
+    }
+    // Enter wipes the frame and only the frame.
+    expect(rows("after").slice(0, 10)).toEqual(markers);
+    expect(rows("after").slice(10).filter((row) => row !== "")).toEqual([]);
     expect(read("err.txt")).toBe("");
   }, TEST_TIMEOUT_MS);
 
