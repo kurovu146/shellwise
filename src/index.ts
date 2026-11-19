@@ -17,7 +17,6 @@ import { daemonRequest } from "./daemon/client";
 import { getSocketPath } from "./daemon/protocol";
 import { selfCommand } from "./utils/self";
 import { getDataDir } from "./utils/paths";
-import { stopHandleInheritance } from "./utils/win-handles";
 import { resolve as resolvePath } from "path";
 
 const args = process.argv.slice(2);
@@ -194,8 +193,12 @@ async function main(): Promise<void> {
               if (value) daemonEnv[name] = resolvePath(value);
             }
             // Keep every handle we were handed (a caller's output pipe among
-            // them) out of the long-lived daemon.
-            stopHandleInheritance();
+            // them) out of the long-lived daemon. Imported here: it loads
+            // bun:ffi, which no other command needs.
+            if (process.platform === "win32") {
+              const { stopHandleInheritance } = await import("./utils/win-handles");
+              stopHandleInheritance();
+            }
             // Fork to background — respawn THIS executable, never a PATH
             // lookup (which could resolve to a different install).
             const proc = Bun.spawn([...selfCommand(), "daemon", "_run"], {
