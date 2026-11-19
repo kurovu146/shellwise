@@ -63,10 +63,26 @@ beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "sw-"));
 });
 
-afterAll(() => {
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitGone(pid: number, ms = 5000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (isAlive(pid) && Date.now() < end) await Bun.sleep(50);
+  return !isAlive(pid);
+}
+
+afterAll(async () => {
   // Do not trust the CLI under test to clean up: kill any daemon whose pid
   // file is left in our temp dir (never our own pid, which the stale-pid
-  // tests write on purpose), then remove the directory.
+  // tests write on purpose), wait for it to release its files, then remove
+  // the directory. Cleanup itself must never throw.
   try {
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".pid"))) {
       const pid = parseInt(readFileSync(join(dir, f), "utf-8"));
@@ -74,11 +90,13 @@ afterAll(() => {
         try {
           process.kill(pid);
         } catch {}
+        await waitGone(pid);
       }
     }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  } catch {}
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {}
 });
 
 describe("daemon lifecycle", () => {
@@ -146,5 +164,52 @@ describe("daemon stop failure", () => {
       fake.close();
       rmSync(pidFile, { force: true });
     }
-  });
+  }, 15000); // the CLI waits ~3s for the daemon to exit before giving up
+});
+
+describe("live but silent daemon", () => {
+  test("a listener that accepts but never replies is alive: nothing is deleted", async () => {
+    const env = envFor("silent");
+    const sock = env.SHELLWISE_DAEMON_SOCKET;
+    const pidFile = join(dir, "silent.pid");
+    const conns: import("net").Socket[] = [];
+    const busy = createServer((c) => {
+      conns.push(c); // accept, never reply: a daemon blocked on the DB lock
+    });
+    await new Promise<void>((r) => busy.listen(sock, r));
+    writeFileSync(pidFile, String(process.pid));
+    try {
+      const status = await sw(env, "daemon", "status");
+      expect(status.out).toContain("Daemon running");
+      expect(existsSync(pidFile)).toBe(true);
+      expect(existsSync(sock)).toBe(true);
+
+      const start = await sw(env, "daemon", "start");
+      expect(start.out).toContain("Daemon already running");
+      expect(existsSync(pidFile)).toBe(true);
+      expect(existsSync(sock)).toBe(true);
+    } finally {
+      conns.forEach((c) => c.destroy());
+      busy.close();
+      rmSync(pidFile, { force: true });
+    }
+  }, 15000);
+});
+
+describe("endpoint ownership on exit", () => {
+  test("a daemon that lost its pid file does not delete the successor's", async () => {
+    const env = envFor("owner");
+    const sock = env.SHELLWISE_DAEMON_SOCKET;
+    const pidFile = join(dir, "owner.pid");
+
+    expect((await sw(env, "daemon", "start")).out).toContain("Daemon started");
+    const realPid = parseInt(readFileSync(pidFile, "utf-8"));
+    // Hand the pid file to a "successor" (this process), then stop the daemon.
+    writeFileSync(pidFile, String(process.pid));
+    expect(await rawRequest(sock, "STOP\n")).toContain("BYE");
+    expect(await waitGone(realPid)).toBe(true);
+
+    expect(readFileSync(pidFile, "utf-8").trim()).toBe(String(process.pid));
+    rmSync(pidFile, { force: true });
+  }, 15000);
 });

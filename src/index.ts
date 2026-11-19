@@ -12,7 +12,7 @@ import { runPrune } from "./cli/prune";
 import { deleteCommand } from "./db/queries";
 import { closeDb } from "./db/connection";
 import { checkForUpdate } from "./utils/update-check";
-import { startServer, isDaemonRunning, isDaemonResponsive, getDaemonInfo } from "./daemon/server";
+import { startServer, isDaemonRunning, isDaemonLive, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
 import { getSocketPath } from "./daemon/protocol";
 import { selfCommand } from "./utils/self";
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
         const sub = args[1];
         switch (sub) {
           case "start": {
-            if (await isDaemonResponsive()) {
+            if (await isDaemonLive()) {
               console.log("Daemon already running.");
               return;
             }
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
             startServer();
             break;
           case "stop": {
-            if (!(await isDaemonResponsive())) {
+            if (!(await isDaemonLive())) {
               console.log("Daemon not running.");
               return;
             }
@@ -206,7 +206,7 @@ async function main(): Promise<void> {
             break;
           }
           case "status": {
-            if (await isDaemonResponsive()) {
+            if (await isDaemonLive()) {
               const info = getDaemonInfo();
               console.log(`Daemon running (pid: ${info?.pid})`);
             } else {

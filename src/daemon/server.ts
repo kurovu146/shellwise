@@ -6,7 +6,7 @@ import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
 import { parseRequest, getSocketPath, getPidPath, formatSuggestResponse } from "./protocol";
 import { FRECENCY_EXPR } from "../db/frecency";
 import { unlinkSync, writeFileSync, existsSync, chmodSync } from "fs";
-import { daemonRequest } from "./client";
+import { probeDaemon } from "./client";
 import type { Socket } from "bun";
 
 // Reject a connection that floods us without ever sending a newline.
@@ -209,6 +209,15 @@ export function startServer(): void {
   process.on("SIGINT", cleanup);
 }
 
+function ownsPidFile(): boolean {
+  try {
+    const content = require("fs").readFileSync(getPidPath(), "utf-8").trim();
+    return parseInt(content.split("\n")[0]) === process.pid;
+  } catch {
+    return false;
+  }
+}
+
 export function stopServer(): void {
   if (idleTimer) clearTimeout(idleTimer);
   if (server) {
@@ -217,14 +226,16 @@ export function stopServer(): void {
   }
   closeDb();
 
-  const socketPath = getSocketPath();
-  const pidPath = getPidPath();
-  try {
-    unlinkSync(socketPath);
-  } catch {}
-  try {
-    unlinkSync(pidPath);
-  } catch {}
+  // Only remove the endpoint files if they are still ours: a daemon that lost
+  // ownership (pid file now names a successor) must not delete the successor's.
+  if (ownsPidFile()) {
+    try {
+      unlinkSync(getSocketPath());
+    } catch {}
+    try {
+      unlinkSync(getPidPath());
+    } catch {}
+  }
 
   process.exit(0);
 }
@@ -248,15 +259,16 @@ export function isDaemonRunning(): boolean {
 }
 
 /**
- * "Running" for the CLI's decisions: the pid is alive AND the socket answers
- * PING. A pid file alone proves little on Windows, where %TEMP% survives
- * reboots and pids are recycled. A live pid that does not answer is treated as
- * stale: both endpoint files are removed so a fresh daemon can take over.
+ * "Running" for the CLI's decisions: the pid is alive AND somebody is
+ * listening on the socket. A pid file alone proves little on Windows, where
+ * %TEMP% survives reboots and pids are recycled. Stale means nobody listens
+ * (no socket file, or the connect fails): both endpoint files are then removed
+ * so a fresh daemon can take over. A daemon that accepts the connection but is
+ * too busy to answer in time is alive and is left untouched.
  */
-export async function isDaemonResponsive(): Promise<boolean> {
+export async function isDaemonLive(): Promise<boolean> {
   if (!isDaemonRunning()) return false;
-  const reply = await daemonRequest("PING\n");
-  if (reply?.[0] === "PONG") return true;
+  if ((await probeDaemon()) !== "unreachable") return true;
   for (const path of [getPidPath(), getSocketPath()]) {
     try {
       unlinkSync(path);
