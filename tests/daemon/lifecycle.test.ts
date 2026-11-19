@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, renameSync, rmdirSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { connect, createServer } from "net";
@@ -136,6 +136,27 @@ describe("daemon lifecycle", () => {
 
     expect((await sw(env, "daemon", "stop")).out).toContain("Daemon stopped");
     expect((await sw(env, "daemon", "status")).out).toContain("Daemon not running");
+  });
+});
+
+// Windows only: there a process's working directory cannot be renamed or
+// removed (EBUSY), so a daemon that kept its starter's folder pinned it.
+describe.skipIf(process.platform !== "win32")("daemon working directory", () => {
+  test("the folder the daemon was started from can be renamed and removed while it runs", async () => {
+    const env = envFor("cwd");
+    const start = join(dir, "start-folder");
+    mkdirSync(start);
+    const p = Bun.spawn([process.execPath, ENTRY, "daemon", "start"], { env, cwd: start, stdout: "pipe", timeout: 20000 });
+    expect(await new Response(p.stdout).text()).toContain("Daemon started");
+    try {
+      expect((await sw(env, "daemon", "status")).out).toContain("Daemon running");
+      const moved = join(dir, "start-folder-moved");
+      renameSync(start, moved);
+      rmdirSync(moved);
+      expect(existsSync(moved)).toBe(false);
+    } finally {
+      await sw(env, "daemon", "stop");
+    }
   });
 });
 

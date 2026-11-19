@@ -16,6 +16,7 @@ import { startServer, isDaemonRunning, isDaemonLive, getDaemonInfo } from "./dae
 import { daemonRequest } from "./daemon/client";
 import { getSocketPath } from "./daemon/protocol";
 import { selfCommand } from "./utils/self";
+import { getDataDir } from "./utils/paths";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -185,6 +186,9 @@ async function main(): Promise<void> {
             // Fork to background — respawn THIS executable, never a PATH
             // lookup (which could resolve to a different install).
             const proc = Bun.spawn([...selfCommand(), "daemon", "_run"], {
+              // A neutral working directory: the daemon outlives its starter,
+              // and on Windows a process's cwd cannot be renamed or removed.
+              cwd: getDataDir(),
               stdio: ["ignore", "ignore", "ignore"],
               windowsHide: true,
               // @ts-ignore - Bun supports detached
