@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSy
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { connect, createServer } from "net";
+import { probeDaemon } from "../../src/daemon/client";
 
 // Spawns real daemons, so everything they touch lives in a private temp dir:
 // own socket, pid file and history DB. Never the developer's real ones.
@@ -78,6 +79,14 @@ async function waitGone(pid: number, ms = 5000): Promise<boolean> {
   return !isAlive(pid);
 }
 
+async function killDaemon(pid: number): Promise<void> {
+  if (!pid || pid === process.pid) return;
+  try {
+    process.kill(pid);
+  } catch {}
+  await waitGone(pid);
+}
+
 afterAll(async () => {
   // Do not trust the CLI under test to clean up: kill any daemon whose pid
   // file is left in our temp dir (never our own pid, which the stale-pid
@@ -94,9 +103,16 @@ afterAll(async () => {
       }
     }
   } catch {}
-  try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  } catch {}
+  // Bun ignores rmSync's maxRetries on Windows and a killed daemon releases
+  // history.db a moment late, so retry explicitly and swallow the last failure.
+  const end = Date.now() + 3000;
+  while (existsSync(dir) && Date.now() < end) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      await Bun.sleep(100);
+    }
+  }
 });
 
 describe("daemon lifecycle", () => {
@@ -197,19 +213,69 @@ describe("live but silent daemon", () => {
 });
 
 describe("endpoint ownership on exit", () => {
-  test("a daemon that lost its pid file does not delete the successor's", async () => {
+  test("a daemon that lost its pid file leaves the successor's socket and pid file alone", async () => {
     const env = envFor("owner");
     const sock = env.SHELLWISE_DAEMON_SOCKET;
     const pidFile = join(dir, "owner.pid");
+    let pid1 = 0;
+    let pid2 = 0;
+    let held: import("net").Socket | undefined;
+    try {
+      expect((await sw(env, "daemon", "start")).out).toContain("Daemon started");
+      pid1 = parseInt(readFileSync(pidFile, "utf-8"));
+      // Keep a connection to D1 open: once D2 takes over the path, this is the
+      // only way left to reach D1.
+      held = connect(sock);
+      await new Promise<void>((r, rej) => {
+        held!.once("connect", () => r());
+        held!.once("error", rej);
+      });
+      // D1 loses ownership (pid file gone); a second start brings up D2 on the same path.
+      rmSync(pidFile);
+      expect((await sw(env, "daemon", "start")).out).toContain("Daemon started");
+      pid2 = parseInt(readFileSync(pidFile, "utf-8"));
+      expect(pid2).not.toBe(pid1);
 
-    expect((await sw(env, "daemon", "start")).out).toContain("Daemon started");
-    const realPid = parseInt(readFileSync(pidFile, "utf-8"));
-    // Hand the pid file to a "successor" (this process), then stop the daemon.
+      // D1 now exits through its stop path, as the idle timer would make it.
+      held.write("STOP\n");
+      expect(await waitGone(pid1)).toBe(true);
+
+      // D2's endpoint must be intact: pid file, socket file (Windows deletes it
+      // when a listener is stopped) and a live answer.
+      expect(parseInt(readFileSync(pidFile, "utf-8"))).toBe(pid2);
+      expect(existsSync(sock)).toBe(true);
+      expect(await rawRequest(sock, "PING\n")).toContain("PONG");
+      expect((await sw(env, "daemon", "status")).out).toContain("Daemon running");
+    } finally {
+      held?.destroy();
+      await killDaemon(pid1);
+      await killDaemon(pid2);
+    }
+  }, 20000);
+});
+
+describe("unreachable socket", () => {
+  test("a live pid plus a leftover socket file nobody listens on is stale; start recovers", async () => {
+    const env = envFor("dead");
+    const sock = env.SHELLWISE_DAEMON_SOCKET;
+    const pidFile = join(dir, "dead.pid");
     writeFileSync(pidFile, String(process.pid));
-    expect(await rawRequest(sock, "STOP\n")).toContain("BYE");
-    expect(await waitGone(realPid)).toBe(true);
-
-    expect(readFileSync(pidFile, "utf-8").trim()).toBe(String(process.pid));
-    rmSync(pidFile, { force: true });
+    writeFileSync(sock, ""); // a file, not a listener: connect fails
+    const saved = process.env.SHELLWISE_DAEMON_SOCKET;
+    process.env.SHELLWISE_DAEMON_SOCKET = sock;
+    let pid = 0;
+    try {
+      expect(await probeDaemon()).toBe("unreachable");
+      const start = await sw(env, "daemon", "start");
+      expect(start.code).toBe(0);
+      expect(start.out).toContain("Daemon started");
+      pid = parseInt(readFileSync(pidFile, "utf-8"));
+      expect(pid).not.toBe(process.pid);
+      expect(await rawRequest(sock, "PING\n")).toContain("PONG");
+    } finally {
+      if (saved === undefined) delete process.env.SHELLWISE_DAEMON_SOCKET;
+      else process.env.SHELLWISE_DAEMON_SOCKET = saved;
+      await killDaemon(pid);
+    }
   }, 15000);
 });

@@ -220,15 +220,17 @@ function ownsPidFile(): boolean {
 
 export function stopServer(): void {
   if (idleTimer) clearTimeout(idleTimer);
-  if (server) {
-    server.stop(true);
-    server = null;
-  }
   closeDb();
 
-  // Only remove the endpoint files if they are still ours: a daemon that lost
-  // ownership (pid file now names a successor) must not delete the successor's.
+  // Decide ownership FIRST: on Windows server.stop() itself deletes whatever
+  // file sits at the socket path, which for a daemon that lost ownership is
+  // the successor's. A non-owner exits without stopping the listener or
+  // unlinking anything.
   if (ownsPidFile()) {
+    if (server) {
+      server.stop(true);
+      server = null;
+    }
     try {
       unlinkSync(getSocketPath());
     } catch {}
