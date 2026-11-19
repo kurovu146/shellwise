@@ -55,7 +55,8 @@ $global:__sw = @{
     BinPath    = $null
     TabFallback      = $null
     ShiftTabFallback = $null
-    DaemonStartAt    = [datetime]::MinValue
+    FallbackLine     = $null
+    FallbackAt       = -1
 }
 $__swPrevOrig = $null
 if ($__swPrev) {
@@ -136,8 +137,11 @@ function global:__sw_record([bool]$Ok, $Code) {
     $dur = [int]($h.EndExecutionTime - $h.StartExecutionTime).TotalMilliseconds
     $cwd = (Get-Location).ProviderPath
     if ($global:__sw.HasHelper) {
-        # Straight over the daemon's socket: no process to start.
-        if ([ShellwiseClient]::Add($global:__sw.Socket, $cmd, $cwd, $exit, $dur, $global:__sw.Session, 'powershell')) { return }
+        # Straight over the daemon's socket: no process to start. Whatever
+        # goes wrong there, the command still goes the other way.
+        $sent = $false
+        try { $sent = [ShellwiseClient]::Add($global:__sw.Socket, $cmd, $cwd, $exit, $dur, $global:__sw.Session, 'powershell') } catch {}
+        if ($sent) { return }
     }
     # A hidden shellwise add, which stores the command itself when no daemon
     # answers.
@@ -145,17 +149,9 @@ function global:__sw_record([bool]$Ok, $Code) {
         SW_ADD_COMMAND = $cmd; SW_ADD_CWD = $cwd; SW_ADD_EXIT_CODE = $exit
         SW_ADD_DURATION = $dur; SW_ADD_SESSION = $global:__sw.Session; SW_ADD_SHELL = 'powershell'
     }
-    if ($global:__sw.HasHelper) { __sw_start_daemon }
-}
-
-# The daemon went away (idle timeout, stopped) or is not up yet: the
-# suggestions need it. Not again within 10 s: until a new daemon answers,
-# every command comes here, and two starts at once leave a second daemon
-# running unreachable until its idle timeout.
-function global:__sw_start_daemon {
-    if (([datetime]::UtcNow - $global:__sw.DaemonStartAt).TotalSeconds -lt 10) { return }
-    $global:__sw.DaemonStartAt = [datetime]::UtcNow
-    __sw_spawn @('daemon', 'start') @{}
+    # The daemon went away (idle timeout, stopped): the suggestions need it.
+    # Of daemons started at once only one keeps running.
+    if ($global:__sw.HasHelper) { __sw_spawn @('daemon', 'start') @{} }
 }
 
 # Returns a prompt that records the last command, then calls $Orig. Each
@@ -206,7 +202,7 @@ Remove-Variable -Name __swPrev, __swPrevOrig, __swCmd, __swLast -ErrorAction Ign
 # The socket file survives logoff and killed daemons on Windows, so its
 # presence proves nothing. Always ask (hidden, non-blocking): daemon start
 # returns at once when a live daemon answers.
-__sw_start_daemon
+__sw_spawn @('daemon', 'start') @{}
 
 # --- Ctrl+R: interactive search ---
 
@@ -254,9 +250,42 @@ if ($global:__sw.BinPath -and (Get-Command -Name Set-PSReadLineKeyHandler -Error
 # --- Suggestions while typing: pwsh 7.2+ with PSReadLine 2.2.2+ ---
 
 # A predictor asks the daemon as you type; PSReadLine shows the answers in
-# its list and Tab / Shift+Tab walk it. Any failure here leaves the shell as
-# set up above: capture and Ctrl+R work, Tab keeps its binding. Windows
-# PowerShell parses this part but never runs it, nor compiles the C#.
+# its list and Tab / Shift+Tab walk it. This switches PredictionViewStyle to
+# ListView and PredictionSource None to Plugin (History to HistoryAndPlugin);
+# set them after this script to keep your own. Any failure here leaves the
+# shell as set up above: capture and Ctrl+R work, Tab keeps its binding.
+# Windows PowerShell parses this part but never runs it, nor compiles the C#.
+
+# Tab or Shift+Tab ($Forward): move in the list when one is showing, else do
+# what the key did before. Moving puts the chosen line in the buffer, so an
+# unchanged buffer means there was no list.
+function global:__sw_tab([bool]$Forward, $Key, $Arg) {
+    $line = $null; $cursor = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+    # Still the line the old function produced (a completion), with no command
+    # run since: carry on with it, so Tab cycles through the completions even
+    # when the completed line has a list of its own.
+    $continuing = $null -ne $global:__sw.FallbackLine -and $line -ceq $global:__sw.FallbackLine -and $global:__sw.FallbackAt -eq $global:__sw.LastId
+    if (-not $continuing) {
+        if ($Forward) {
+            [Microsoft.PowerShell.PSConsoleReadLine]::NextSuggestion($Key, $Arg)
+        } else {
+            [Microsoft.PowerShell.PSConsoleReadLine]::PreviousSuggestion($Key, $Arg)
+        }
+        $after = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)
+        if ($after -cne $line) {
+            $global:__sw.FallbackLine = $null
+            return
+        }
+    }
+    $fn = if ($Forward) { $global:__sw.TabFallback } else { $global:__sw.ShiftTabFallback }
+    [Microsoft.PowerShell.PSConsoleReadLine]::($fn).Invoke($Key, $Arg)
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+    $global:__sw.FallbackLine = $line
+    $global:__sw.FallbackAt = $global:__sw.LastId
+}
+
 try {
     $__swRl = Get-Module -Name PSReadLine | Select-Object -First 1
     if ($PSVersionTable.PSVersion -ge [version]'7.2' -and $__swRl -and $__swRl.Version -ge [version]'2.2.2') {
@@ -265,87 +294,118 @@ try {
             # loaded from the cache.
             $__swV = $PSVersionTable.PSVersion
             $__swDll = Join-Path $global:__sw.DataDir "ps\shellwise-helper-${HELPER_HASH}-$($__swV.Major).$($__swV.Minor).dll"
-            if (-not [System.IO.File]::Exists($__swDll)) {
-                $__swDir = [System.IO.Path]::GetDirectoryName($__swDll)
+            $__swDir = [System.IO.Path]::GetDirectoryName($__swDll)
+            $__swBuild = {
                 $null = [System.IO.Directory]::CreateDirectory($__swDir)
-                $__swTmp = "$__swDll.$PID.tmp"
-                Add-Type -OutputAssembly $__swTmp -ErrorAction Stop -TypeDefinition @'
-${HELPER_SOURCE}'@
+                # Add-Type reads -OutputAssembly as a wildcard pattern, which a
+                # data dir with [ or ] in its path breaks: compile to a fresh
+                # name in the temp dir, then copy with .NET into the cache dir
+                # and rename there. The rename fails when another shell
+                # starting at the same time got there first: its DLL is as
+                # good as ours.
+                $out = Join-Path ([System.IO.Path]::GetTempPath()) ('shellwise-helper-' + [guid]::NewGuid().ToString('N') + '.dll')
+                $tmp = "$__swDll.$PID.tmp"
                 try {
-                    # Fails when another shell starting at the same time got
-                    # there first: then its DLL is as good as ours.
-                    [System.IO.File]::Move($__swTmp, $__swDll)
-                } catch {
-                    try { [System.IO.File]::Delete($__swTmp) } catch {}
-                }
-                # Builds of other sources. A shell still running one keeps it
-                # locked; the next start retries.
-                foreach ($__swOld in [System.IO.Directory]::GetFiles($__swDir, 'shellwise-helper-*.dll')) {
-                    if ([System.IO.Path]::GetFileName($__swOld) -notlike 'shellwise-helper-${HELPER_HASH}-*') {
-                        try { [System.IO.File]::Delete($__swOld) } catch {}
+                    Add-Type -OutputAssembly $out -ErrorAction Stop -TypeDefinition @'
+${HELPER_SOURCE}'@
+                    [System.IO.File]::Copy($out, $tmp, $true)
+                    if (-not [System.IO.File]::Exists($__swDll)) {
+                        try { [System.IO.File]::Move($tmp, $__swDll) } catch {}
                     }
+                } finally {
+                    [System.IO.File]::Delete($out)
+                    [System.IO.File]::Delete($tmp)
+                }
+                # Builds of other sources (a shell still running one keeps it
+                # locked; a later start retries) and temp files of shells
+                # killed while compiling: minutes old, not one being written.
+                foreach ($f in [System.IO.Directory]::GetFiles($__swDir, 'shellwise-helper-*')) {
+                    $n = [System.IO.Path]::GetFileName($f)
+                    $stale = if ($n -like '*.tmp') {
+                        ([datetime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($f)).TotalMinutes -gt 10
+                    } else {
+                        $n -like '*.dll' -and $n -notlike 'shellwise-helper-${HELPER_HASH}-*'
+                    }
+                    if ($stale) { try { [System.IO.File]::Delete($f) } catch {} }
                 }
             }
-            Add-Type -LiteralPath $__swDll -ErrorAction Stop
+            if (-not [System.IO.File]::Exists($__swDll)) { & $__swBuild }
+            try {
+                Add-Type -LiteralPath $__swDll -ErrorAction Stop
+            } catch {
+                # A broken file in the cache (a write cut short, a disk
+                # error) would fail every start: build it again, once.
+                [System.IO.File]::Delete($__swDll)
+                & $__swBuild
+                Add-Type -LiteralPath $__swDll -ErrorAction Stop
+            }
         }
         [ShellwisePredictor]::SocketPath = $global:__sw.Socket
         $global:__sw.HasHelper = $true
-        # Registered already when the script was loaded before in this shell.
-        $__swPredictor = [ShellwisePredictor]::new()
-        $__swKind = [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor
-        $__swInfo = [System.Management.Automation.Subsystem.SubsystemManager]::GetSubsystemInfo($__swKind)
-        if (-not ($__swInfo.Implementations | Where-Object { $_.Id -eq $__swPredictor.Id })) {
-            [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem($__swKind, $__swPredictor)
-        }
 
-        $__swOpt = Get-PSReadLineOption
-        if ("$($__swOpt.PredictionSource)" -eq 'None') {
-            Set-PSReadLineOption -PredictionSource Plugin -ErrorAction Stop
-        } elseif ("$($__swOpt.PredictionSource)" -eq 'History') {
-            Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction Stop
-        }
-        Set-PSReadLineOption -PredictionViewStyle ListView -ErrorAction Stop
-
-        # What Tab and Shift+Tab did so far: they keep doing it whenever no
-        # list is showing. Only a PSReadLine function can be called from our
-        # handler; a script block bound by the user cannot be read back.
-        $__swKeyFn = {
-            param([string]$Chord, $Kept, [string]$Default)
-            $h = Get-PSReadLineKeyHandler -Chord $Chord | Select-Object -First 1
-            $fn = if ($h) { [string]$h.Function } else { '' }
-            $sig = [type[]]@([System.Nullable[System.ConsoleKeyInfo]], [object])
-            if ($fn -and [Microsoft.PowerShell.PSConsoleReadLine].GetMethod($fn, $sig)) { return $fn }
-            # Our own handler, from an earlier load: keep what it called.
-            if ($Kept) { return $Kept }
-            $Default
-        }
-        $global:__sw.TabFallback = & $__swKeyFn 'Tab' $global:__sw.TabFallback 'TabCompleteNext'
-        $global:__sw.ShiftTabFallback = & $__swKeyFn 'Shift+Tab' $global:__sw.ShiftTabFallback 'TabCompletePrevious'
-
-        # Moving in the list puts the chosen line in the buffer. When the
-        # buffer did not change, no list was showing: do the key's old job.
-        Set-PSReadLineKeyHandler -Chord 'Tab' -BriefDescription 'ShellwiseNext' -Description 'Next shellwise suggestion, or the previous Tab function' -ScriptBlock {
-            param($key, $arg)
-            $before = $null; $after = $null; $cursor = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$before, [ref]$cursor)
-            [Microsoft.PowerShell.PSConsoleReadLine]::NextSuggestion($key, $arg)
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)
-            if ($after -ceq $before) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::($global:__sw.TabFallback).Invoke($key, $arg)
+        # Only for a console PSReadLine can draw predictions in: it refuses
+        # them when the output is redirected or has no virtual terminal.
+        if (-not [Console]::IsOutputRedirected -and $Host.UI.SupportsVirtualTerminal) {
+            # Registered already when the script was loaded before in this shell.
+            $__swPredictor = [ShellwisePredictor]::new()
+            $__swKind = [System.Management.Automation.Subsystem.SubsystemKind]::CommandPredictor
+            $__swInfo = [System.Management.Automation.Subsystem.SubsystemManager]::GetSubsystemInfo($__swKind)
+            if (-not ($__swInfo.Implementations | Where-Object { $_.Id -eq $__swPredictor.Id })) {
+                [System.Management.Automation.Subsystem.SubsystemManager]::RegisterSubsystem($__swKind, $__swPredictor)
             }
-        }
-        Set-PSReadLineKeyHandler -Chord 'Shift+Tab' -BriefDescription 'ShellwisePrevious' -Description 'Previous shellwise suggestion, or the previous Shift+Tab function' -ScriptBlock {
-            param($key, $arg)
-            $before = $null; $after = $null; $cursor = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$before, [ref]$cursor)
-            [Microsoft.PowerShell.PSConsoleReadLine]::PreviousSuggestion($key, $arg)
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)
-            if ($after -ceq $before) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::($global:__sw.ShiftTabFallback).Invoke($key, $arg)
+
+            $__swOpt = Get-PSReadLineOption
+            if ("$($__swOpt.PredictionSource)" -eq 'None') {
+                Set-PSReadLineOption -PredictionSource Plugin -ErrorAction Stop
+            } elseif ("$($__swOpt.PredictionSource)" -eq 'History') {
+                Set-PSReadLineOption -PredictionSource HistoryAndPlugin -ErrorAction Stop
+            }
+
+            # PSReadLine draws its list from 50x5 on, and below that warns at
+            # every start: there the view and the keys are left as they are.
+            if ([Console]::WindowWidth -ge 50 -and [Console]::WindowHeight -ge 5) {
+                Set-PSReadLineOption -PredictionViewStyle ListView -ErrorAction Stop
+
+                # Tab and Shift+Tab, each on its own. Bound to a PSReadLine
+                # function (TabCompleteNext, MenuComplete, ...): ours calls it
+                # whenever no list is showing. Bound to someone's own script
+                # block, which cannot be read back and called: left alone (the
+                # list stays reachable with the arrow keys). Returns the
+                # function to fall back to, or $null to leave the key alone.
+                $__swKeyFn = {
+                    param([string]$Chord, [string]$Ours, $Kept, [string]$Default)
+                    $h = Get-PSReadLineKeyHandler -Chord $Chord | Select-Object -First 1
+                    $fn = if ($h) { [string]$h.Function } else { '' }
+                    if (-not $fn) { return $Default }
+                    $sig = [type[]]@([System.Nullable[System.ConsoleKeyInfo]], [object])
+                    if ([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($fn, $sig)) { return $fn }
+                    # Ours, from an earlier load: keep what it called.
+                    if ($fn -eq $Ours) {
+                        if ($Kept) { return $Kept }
+                        return $Default
+                    }
+                    $null
+                }
+                $__swFn = & $__swKeyFn 'Tab' 'ShellwiseNext' $global:__sw.TabFallback 'TabCompleteNext'
+                if ($__swFn) {
+                    $global:__sw.TabFallback = $__swFn
+                    Set-PSReadLineKeyHandler -Chord 'Tab' -BriefDescription 'ShellwiseNext' -Description 'Next shellwise suggestion, or the previous Tab function' -ScriptBlock {
+                        param($key, $arg)
+                        __sw_tab $true $key $arg
+                    }
+                }
+                $__swFn = & $__swKeyFn 'Shift+Tab' 'ShellwisePrevious' $global:__sw.ShiftTabFallback 'TabCompletePrevious'
+                if ($__swFn) {
+                    $global:__sw.ShiftTabFallback = $__swFn
+                    Set-PSReadLineKeyHandler -Chord 'Shift+Tab' -BriefDescription 'ShellwisePrevious' -Description 'Previous shellwise suggestion, or the previous Shift+Tab function' -ScriptBlock {
+                        param($key, $arg)
+                        __sw_tab $false $key $arg
+                    }
+                }
             }
         }
     }
 } catch {}
-Remove-Variable -Name __swRl, __swV, __swDll, __swDir, __swTmp, __swOld, __swPredictor, __swKind, __swInfo, __swOpt, __swKeyFn -ErrorAction Ignore
+Remove-Variable -Name __swRl, __swV, __swDll, __swDir, __swBuild, __swPredictor, __swKind, __swInfo, __swOpt, __swKeyFn, __swFn -ErrorAction Ignore
 `;
 }

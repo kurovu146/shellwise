@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createHash } from "crypto";
@@ -243,7 +243,8 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
     expect(r.out).toBe("rec=echo two");
   }, SHELL_TIMEOUT_MS);
 
-  test.skipIf(SHELLS.length === 0)(
+  // Windows only: it records through a .cmd shim, started with cmd.exe.
+  test.skipIf(SHELLS.length === 0 || process.platform !== "win32")(
     "records a command when the environment has two names differing only in case",
     () => {
       // Windows PowerShell's .NET cannot copy such an environment for a child.
@@ -293,9 +294,14 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
   }, SHELL_TIMEOUT_MS);
 });
 
+// What follows compiles and loads the C# helper. Windows only: the
+// integration is set up for Windows, and pwsh on Linux and macOS (installed on
+// CI runners) has never been run against it.
+const HELPER_PWSH = process.platform === "win32" && Bun.which("pwsh") !== null;
+
 // The C# helper on its own: compiled in memory by pwsh, talking to a stand-in
 // daemon that logs each request and sends a fixed reply.
-describe.skipIf(Bun.which("pwsh") === null)("the suggestion helper in pwsh", () => {
+describe.skipIf(!HELPER_PWSH)("the suggestion helper in pwsh", () => {
   let csFile: string;
   let daemons = 0;
   beforeAll(() => {
@@ -403,24 +409,75 @@ describe.skipIf(Bun.which("pwsh") === null)("the suggestion helper in pwsh", () 
   }, SHELL_TIMEOUT_MS);
 });
 
-describe.skipIf(Bun.which("pwsh") === null)("the helper's DLL cache", () => {
-  test("shells starting at once share one DLL, and builds of other sources are removed", async () => {
-    const data = join(dir, "cache ệ");
+describe.skipIf(!HELPER_PWSH)("the helper's DLL cache", () => {
+  let n = 0;
+  let version = "";
+  beforeAll(() => {
+    const p = Bun.spawnSync(["pwsh", "-NoProfile", "-NonInteractive", "-Command", "'{0}.{1}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor"]);
+    version = p.stdout.toString().trim();
+  }, SHELL_TIMEOUT_MS);
+  const ownDll = () => `shellwise-helper-${HELPER_HASH}-${version}.dll`;
+
+  /** A data dir named with a space, brackets and a non-ASCII letter: none of them may stop the build. */
+  function cache(): { psDir: string; script: string } {
+    const data = join(dir, `cache [x] ệ ${++n}`);
     const psDir = join(data, "ps");
     mkdirSync(psDir, { recursive: true });
-    // An unlocked build of another source; not one of this source for another pwsh.
-    writeFileSync(join(psDir, "shellwise-helper-000000000000-7.6.dll"), "old");
-    writeFileSync(join(psDir, `shellwise-helper-${HELPER_HASH}-7.0.dll`), "other pwsh");
-    const f = join(dir, "cache.ps1");
-    writeFileSync(f, generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: data }));
-    // PSReadLine is not loaded in a non-interactive shell unless imported.
-    const command = [
+    const script = join(dir, `cache-${n}.ps1`);
+    writeFileSync(script, generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: data }));
+    return { psDir, script };
+  }
+
+  // PSReadLine is not loaded in a non-interactive shell unless imported. The
+  // output is redirected, as any test's is: the list setup is skipped then.
+  const loadCommand = (script: string) =>
+    [
       "Import-Module PSReadLine",
-      `Invoke-Expression (Get-Content -Raw '${f}')`,
-      `'helper=' + $global:__sw.HasHelper + ' cached=' + ([System.IO.Path]::GetDirectoryName([ShellwisePredictor].Assembly.Location) -eq (Join-Path $global:__sw.DataDir 'ps'))`,
+      `Invoke-Expression (Get-Content -Raw '${script}')`,
+      "$loc = if ('ShellwisePredictor' -as [type]) { [System.IO.Path]::GetDirectoryName([ShellwisePredictor].Assembly.Location) } else { '' }",
+      "'helper=' + $global:__sw.HasHelper + ' cached=' + ($loc -eq (Join-Path $global:__sw.DataDir 'ps')) + ' errors=' + $Error.Count + ' tab=' + (Get-PSReadLineKeyHandler -Chord Tab).Function + ' view=' + (Get-PSReadLineOption).PredictionViewStyle",
     ].join("; ");
+  const load = (script: string) => {
+    const p = Bun.spawnSync(["pwsh", "-NoProfile", "-NonInteractive", "-Command", loadCommand(script)], { env: { ...process.env, ...env } });
+    return { out: p.stdout.toString().trim(), err: p.stderr.toString().trim() };
+  };
+  const READY = "helper=True cached=True errors=0 tab=TabCompleteNext view=InlineView";
+
+  test("a shell with redirected output builds and loads the helper with no error and leaves Tab and the view alone", () => {
+    const { psDir, script } = cache();
+    expect(load(script)).toEqual({ out: READY, err: "" });
+    // And from the cache.
+    expect(load(script)).toEqual({ out: READY, err: "" });
+    expect(readdirSync(psDir)).toEqual([ownDll()]);
+  }, SHELL_TIMEOUT_MS);
+
+  test("a broken DLL in the cache is built again", () => {
+    const { psDir, script } = cache();
+    writeFileSync(join(psDir, ownDll()), "");
+    const first = load(script);
+    expect(first.err).toBe("");
+    // The failed load of the broken file stays in $Error.
+    expect(first.out).toMatch(/^helper=True cached=True errors=\d+ /);
+    expect(statSync(join(psDir, ownDll())).size).toBeGreaterThan(0);
+    expect(load(script)).toEqual({ out: READY, err: "" });
+  }, SHELL_TIMEOUT_MS);
+
+  test("shells starting at once share one DLL; builds of other sources and old temp files are removed", async () => {
+    const { psDir, script } = cache();
+    // A build of another source (unlocked), this source for another pwsh,
+    // a temp file of a shell killed while compiling an hour ago, and one a
+    // shell may be writing right now.
+    const otherPwsh = `shellwise-helper-${HELPER_HASH}-7.0.dll`;
+    const killedTmp = `${ownDll()}.99999.tmp`;
+    const freshTmp = `${ownDll()}.88888.tmp`;
+    writeFileSync(join(psDir, "shellwise-helper-000000000000-7.6.dll"), "old");
+    writeFileSync(join(psDir, otherPwsh), "other pwsh");
+    writeFileSync(join(psDir, killedTmp), "");
+    const anHourAgo = new Date(Date.now() - 3600_000);
+    utimesSync(join(psDir, killedTmp), anHourAgo, anHourAgo);
+    writeFileSync(join(psDir, freshTmp), "");
     const shells = Array.from({ length: 4 }, () =>
-      Bun.spawn(["pwsh", "-NoProfile", "-NonInteractive", "-Command", command], {
+      Bun.spawn(["pwsh", "-NoProfile", "-NonInteractive", "-Command", loadCommand(script)], {
         env: { ...process.env, ...env },
         stdout: "pipe",
         stderr: "pipe",
@@ -430,11 +487,11 @@ describe.skipIf(Bun.which("pwsh") === null)("the helper's DLL cache", () => {
       shells.map(async (p) => [(await new Response(p.stdout).text()).trim(), (await new Response(p.stderr).text()).trim()])
     );
     await Promise.all(shells.map((p) => p.exited));
-    expect(results).toEqual(Array(4).fill(["helper=True cached=True", ""]));
-    // This pwsh's build, and the other pwsh's one kept; no temp file left.
-    const left = readdirSync(psDir).filter((n) => n !== `shellwise-helper-${HELPER_HASH}-7.0.dll`);
-    expect(left).toHaveLength(1);
-    expect(left[0]).toMatch(/^shellwise-helper-[0-9a-f]{12}-7\.\d+\.dll$/);
-    expect(left[0].startsWith(`shellwise-helper-${HELPER_HASH}-`)).toBe(true);
+    for (const [out, err] of results) {
+      expect(err).toBe("");
+      // A shell that lost the race to put its build in place may count that in $Error.
+      expect(out).toMatch(/^helper=True cached=True errors=\d+ tab=TabCompleteNext view=InlineView$/);
+    }
+    expect(readdirSync(psDir).sort()).toEqual([ownDll(), freshTmp, otherPwsh].sort());
   }, SHELL_TIMEOUT_MS);
 });
