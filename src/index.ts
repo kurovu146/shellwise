@@ -32,6 +32,28 @@ function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
+/**
+ * `add --from-env`: the same fields as the flags, read from SW_ADD_* env vars.
+ * PowerShell records commands this way, since a Windows command line would
+ * lose or mangle quotes inside the command.
+ */
+function addFlagsFromEnv(): Record<string, string> {
+  const vars: Record<string, string> = {
+    command: "SW_ADD_COMMAND",
+    cwd: "SW_ADD_CWD",
+    "exit-code": "SW_ADD_EXIT_CODE",
+    duration: "SW_ADD_DURATION",
+    session: "SW_ADD_SESSION",
+    shell: "SW_ADD_SHELL",
+  };
+  const flags: Record<string, string> = {};
+  for (const [flag, name] of Object.entries(vars)) {
+    const value = process.env[name];
+    if (value) flags[flag] = value;
+  }
+  return flags;
+}
+
 function printHelp(): void {
   console.log(`shellwise - Smart command history with fuzzy search
 
@@ -42,7 +64,7 @@ Commands:
   suggest --query <text>      Get top suggestion (used by shell hook)
   add <cmd>                   Save a command to history
   delete <cmd>                Delete a command from history
-  init <zsh|bash|fish>        Output shell integration script
+  init <zsh|bash|fish|powershell>  Output shell integration script
   ssh [ssh options] <host>    SSH with suggestions on the remote host
   import [zsh|bash|fish]      Import existing shell history
   stats                       Show usage statistics
@@ -54,6 +76,7 @@ Setup:
   Add to ~/.zshrc:   eval "$(shellwise init zsh)"
   Add to ~/.bashrc:  eval "$(shellwise init bash)"
   Add to fish config: shellwise init fish | source
+  Add to $PROFILE:   shellwise init powershell | Out-String | Invoke-Expression
 
 Features:
   - Auto-save: commands are recorded automatically
@@ -68,7 +91,9 @@ async function main(): Promise<void> {
     switch (command) {
       case "search": {
         const flags = parseFlags(args.slice(1));
-        runSearch(flags.query || "");
+        // PowerShell passes the query in SW_QUERY: a Windows command line
+        // would mangle its quotes.
+        runSearch(flags.query ?? process.env.SW_QUERY ?? "");
         break;
       }
 
@@ -89,7 +114,7 @@ async function main(): Promise<void> {
       }
 
       case "add": {
-        const flags = parseFlags(args.slice(1));
+        const flags = args[1] === "--from-env" ? addFlagsFromEnv() : parseFlags(args.slice(1));
         const addCmd = flags.command || args.slice(1).filter(a => !a.startsWith("--")).join(" ");
         if (!addCmd) {
           console.error("Usage: shellwise add <cmd>");
@@ -118,7 +143,7 @@ async function main(): Promise<void> {
       case "init": {
         const shell = args[1];
         if (!shell) {
-          console.error("Usage: shellwise init <zsh|bash|fish> [--remote]");
+          console.error("Usage: shellwise init <zsh|bash|fish|powershell> [--remote]");
           process.exit(1);
         }
         runInit(shell, "shellwise", { remote: args.includes("--remote") });
