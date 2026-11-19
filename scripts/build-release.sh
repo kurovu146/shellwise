@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build cross-platform standalone binaries and tarballs into release/.
+# Build cross-platform standalone binaries, tarballs and a Windows zip into release/.
 # Usage: bash scripts/build-release.sh
 set -euo pipefail
 
@@ -14,6 +14,10 @@ for t in "${TARGETS[@]}"; do
   tar -czf "release/shellwise-$t.tar.gz" -C release "shellwise-$t"
 done
 
+echo "→ building shellwise-windows-x64"
+bun build src/index.ts --compile --target=bun-windows-x64 --outfile release/shellwise-windows-x64/shellwise.exe
+( cd release/shellwise-windows-x64 && zip -q ../shellwise-windows-x64.zip shellwise.exe )
+
 echo
 echo "Checksums:"
-( cd release && shasum -a 256 shellwise-*.tar.gz )
+( cd release && shasum -a 256 shellwise-*.tar.gz shellwise-*.zip )

@@ -15,6 +15,9 @@ import {
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
+// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
+// binary instead of `bun src/index.ts`.
+const CLI = process.env.SW_TEST_BIN ? [process.env.SW_TEST_BIN] : [process.execPath, ENTRY];
 const GIT_COMMANDS = ["git status", "git stash pop"];
 // Each test starts a console, a CLI and a driver; the driver polls for up to 10s.
 const TEST_TIMEOUT_MS = 30_000;
@@ -78,7 +81,7 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
       SHELLWISE_DAEMON_SOCKET: join(dir, "no-daemon.sock"),
     };
     for (const command of [...GIT_COMMANDS, "docker ps"]) {
-      const p = Bun.spawnSync([process.execPath, ENTRY, "add", "--command", command], {
+      const p = Bun.spawnSync([...CLI, "add", "--command", command], {
         env: { ...process.env, ...env },
       });
       expect(p.exitCode).toBe(0);
@@ -100,17 +103,17 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
    * `after` lines once the search has exited.
    */
   function startSearch(before: string[] = [], after: string[] = []): number {
-    const run = `@"${process.execPath}" "${ENTRY}" search --query git > "${file("selected.txt")}" 2> "${file("err.txt")}"`;
+    const run = `@${CLI.map((a) => `"${a}"`).join(" ")} search --query git > "${file("selected.txt")}" 2> "${file("err.txt")}"`;
     writeFileSync(file("run.cmd"), [...before, run, ...after].join("\r\n") + "\r\n");
     pid = startHiddenConsole("cmd.exe", ["/c", file("run.cmd")], env);
     return pid;
   }
 
-  /** Run `bun <args>` (default: the search) under MODES_WRAPPER. */
-  function startRecordingModes(args: string[] = [ENTRY, "search", "--query", "git"]): number {
+  /** Run `command` (default: the search) under MODES_WRAPPER. */
+  function startRecordingModes(command: string[] = [...CLI, "search", "--query", "git"]): number {
     writeFileSync(file("wrapper.ts"), MODES_WRAPPER);
     const wrapperArgs = [file("wrapper.ts"), file("selected.txt"), file("err.txt"), file("modes.txt")];
-    pid = startHiddenConsole(process.execPath, [...wrapperArgs, process.execPath, ...args], env);
+    pid = startHiddenConsole(process.execPath, [...wrapperArgs, ...command], env);
     return pid;
   }
 
@@ -262,7 +265,7 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
 
   test("restores the console modes when an error skips the caller's cleanup", () => {
     writeFileSync(file("throw.ts"), THROW_AFTER_RAW);
-    const p = startRecordingModes([file("throw.ts")]);
+    const p = startRecordingModes([process.execPath, file("throw.ts")]);
     expectExited(p);
 
     const { before, after, exitCode } = recordedModes();

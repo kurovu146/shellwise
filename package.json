@@ -4,20 +4,20 @@
   "description": "Smart command history with inline auto-suggest and fuzzy search for your terminal",
   "type": "module",
   "bin": {
-    "shellwise": "./bin/shellwise",
-    "sw": "./bin/shellwise"
+    "shellwise": "./src/index.ts",
+    "sw": "./src/index.ts"
   },
   "files": [
-    "bin/shellwise",
     "src/**/*.ts",
-    "scripts/*.sh"
+    "scripts/*.sh",
+    "scripts/*.ts"
   ],
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/sw",
     "test": "bun test",
-    "postinstall": "bash scripts/setup.sh || true",
-    "preuninstall": "bash scripts/uninstall.sh || true"
+    "postinstall": "bun scripts/install-hook.ts setup || exit 0",
+    "preuninstall": "bun scripts/install-hook.ts uninstall || exit 0"
   },
   "keywords": [
     "shell",

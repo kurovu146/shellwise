@@ -2,12 +2,17 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 import { HELPER_HASH } from "../../src/cli/init/powershell-helper.cs";
 import { drive, killTree, removeDir, startHiddenConsole, waitForExit, type Step } from "./console-harness";
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
+// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
+// binary, and puts its dir on the shell's PATH instead of a .cmd shim.
+const TEST_BIN = process.env.SW_TEST_BIN;
+if (TEST_BIN && basename(TEST_BIN).toLowerCase() !== "shellwise.exe") throw new Error("SW_TEST_BIN must name a shellwise.exe");
+const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 // A cold pwsh with PSReadLine, plus compiling the helper on first load.
 const TEST_TIMEOUT_MS = 60_000;
 const SETUP_TIMEOUT_MS = 30_000;
@@ -54,12 +59,12 @@ const dump = (title: string, rows: string[]) => {
 
 /** Pids of every `daemon _run` of this checkout, from the process table. */
 function daemonPids(): number[] {
-  const marker = `${ENTRY} daemon _run`.toLowerCase();
-  const query = `Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
+  const marker = `${TEST_BIN ?? ENTRY} daemon _run`.toLowerCase();
+  const query = `Get-CimInstance Win32_Process -Filter "Name='${basename(CLI[0])}'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
   const out = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", query]).stdout.toString();
   return out
     .split(/\r?\n/)
-    .filter((l) => l.toLowerCase().includes(marker))
+    .filter((l) => l.replace(/"/g, "").toLowerCase().includes(marker))
     .map((l) => parseInt(l));
 }
 
@@ -77,9 +82,9 @@ function waitForScreen(pid: number, what: string, done: (rows: string[]) => bool
 }
 
 /**
- * A temp dir with a `shellwise.cmd` shim first on PATH, a seeded history DB
- * and a running daemon, all isolated from the real ones. The data dir has a
- * space and a non-ASCII letter: the DLL cache is there.
+ * A temp dir with a `shellwise.cmd` shim (or SW_TEST_BIN's dir) first on
+ * PATH, a seeded history DB and a running daemon, all isolated from the real
+ * ones. The data dir has a space and a non-ASCII letter: the DLL cache is there.
  */
 class Sandbox {
   dir = mkdtempSync(join(tmpdir(), "sw-ps-suggest-"));
@@ -88,9 +93,13 @@ class Sandbox {
   private foreign = new Set(daemonPids());
 
   constructor(seed: string[]) {
-    const bin = join(this.dir, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "shellwise.cmd"), `@"${process.execPath}" "${ENTRY}" %*\r\n`);
+    let bin = join(this.dir, "bin");
+    if (TEST_BIN) {
+      bin = dirname(TEST_BIN);
+    } else {
+      mkdirSync(bin);
+      writeFileSync(join(bin, "shellwise.cmd"), `@"${process.execPath}" "${ENTRY}" %*\r\n`);
+    }
     const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
     const data = join(this.dir, "data ệ");
     this.env = {
@@ -105,7 +114,7 @@ class Sandbox {
   }
 
   cli(args: string[]): string {
-    return Bun.spawnSync([process.execPath, ENTRY, ...args], { env: { ...process.env, ...this.env } }).stdout.toString();
+    return Bun.spawnSync([...CLI, ...args], { env: { ...process.env, ...this.env } }).stdout.toString();
   }
 
   /** A hidden pwsh running `profileLines` (each its own line) and staying open. */

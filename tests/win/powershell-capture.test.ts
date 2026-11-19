@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 import {
   drive,
   killTree,
@@ -15,6 +15,11 @@ import {
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
+// SW_TEST_BIN=<path to a compiled shellwise.exe> runs the CLI from that
+// binary, and puts its dir on the shells' PATH instead of a .cmd shim.
+const TEST_BIN = process.env.SW_TEST_BIN;
+if (TEST_BIN && basename(TEST_BIN).toLowerCase() !== "shellwise.exe") throw new Error("SW_TEST_BIN must name a shellwise.exe");
+const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 // A shell plus PSReadLine starting cold, then several commands that each spawn bun.
 const TEST_TIMEOUT_MS = 60_000;
 const SHELLS = ["pwsh", "powershell.exe"].filter((s) => Bun.which(s) !== null);
@@ -45,14 +50,19 @@ const dump = (title: string, rows: string[]) => {
 };
 
 /**
- * A temp dir with a `shellwise.cmd` shim first on PATH, and the env that
- * isolates everything shellwise touches (history DB, daemon endpoint) in it.
+ * A temp dir with a `shellwise.cmd` shim (or SW_TEST_BIN's dir) first on
+ * PATH, and the env that isolates everything shellwise touches (history DB,
+ * daemon endpoint) in it.
  */
 function sandbox(shell: string): { dir: string; env: Record<string, string> } {
   const dir = mkdtempSync(join(tmpdir(), "sw-ps-e2e-"));
-  const bin = join(dir, "bin");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "shellwise.cmd"), `@"${process.execPath}" "${ENTRY}" %*\r\n`);
+  let bin = join(dir, "bin");
+  if (TEST_BIN) {
+    bin = dirname(TEST_BIN);
+  } else {
+    mkdirSync(bin);
+    writeFileSync(join(bin, "shellwise.cmd"), `@"${process.execPath}" "${ENTRY}" %*\r\n`);
+  }
   // Started from PowerShell the variable is "Path": a second "PATH" key
   // would lose to it in the child's environment.
   const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
@@ -73,7 +83,7 @@ function sandbox(shell: string): { dir: string; env: Record<string, string> } {
 }
 
 function cliIn(env: Record<string, string>, args: string[]): string {
-  const p = Bun.spawnSync([process.execPath, ENTRY, ...args], { env: { ...process.env, ...env } });
+  const p = Bun.spawnSync([...CLI, ...args], { env: { ...process.env, ...env } });
   return p.stdout.toString();
 }
 

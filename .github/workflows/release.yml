@@ -32,7 +32,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/*.tar.gz \
+          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --repo "$GITHUB_REPOSITORY"
