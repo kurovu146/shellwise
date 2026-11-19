@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { HELPER_HASH } from "../../src/cli/init/powershell-helper.cs";
 import { drive, killTree, removeDir, startHiddenConsole, waitForExit, type Step } from "./console-harness";
+import { daemonPids as findDaemonPids } from "../daemon/daemon-processes";
 
 const REPO = join(import.meta.dir, "..", "..");
 const ENTRY = join(REPO, "src", "index.ts");
@@ -57,16 +58,8 @@ const dump = (title: string, rows: string[]) => {
   if (process.env.SW_E2E_DUMP) console.log(`--- ${title}\n${rows.join("\n").trimEnd()}`);
 };
 
-/** Pids of every `daemon _run` of this checkout, from the process table. */
-function daemonPids(): number[] {
-  const marker = `${TEST_BIN ?? ENTRY} daemon _run`.toLowerCase();
-  const query = `Get-CimInstance Win32_Process -Filter "Name='${basename(CLI[0])}'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
-  const out = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", query]).stdout.toString();
-  return out
-    .split(/\r?\n/)
-    .filter((l) => l.replace(/"/g, "").toLowerCase().includes(marker))
-    .map((l) => parseInt(l));
-}
+/** Pids of every `daemon _run` of this checkout (or of SW_TEST_BIN), from the process table. */
+const daemonPids = () => findDaemonPids(basename(CLI[0]), TEST_BIN ?? ENTRY);
 
 /** Poll the window of `pid` until `done` holds on two reads in a row. */
 function waitForScreen(pid: number, what: string, done: (rows: string[]) => boolean): string[] {
@@ -330,15 +323,17 @@ describe.skipIf(process.platform !== "win32" || !HAS_PWSH)("PowerShell: what Tab
   // Completing `gc zz` gives these one after the other; each completed line
   // has a list of its own, from this history.
   const FILES = ["zzalpha.txt", "zzbeta.txt", "zzgamma.txt"];
+  // The only completion of `gc on`; its completed line has a list.
+  const ONLY = "only-one.txt";
   let box: Sandbox;
   let work: string;
   const shells: number[] = [];
 
   beforeAll(() => {
-    box = new Sandbox([...SEEDED, ...FILES.map((f) => `gc .\\${f} -Raw`)]);
+    box = new Sandbox([...SEEDED, ...[...FILES, ONLY].map((f) => `gc .\\${f} -Raw`)]);
     work = join(box.dir, "work");
     mkdirSync(work);
-    for (const f of FILES) writeFileSync(join(work, f), "");
+    for (const f of [...FILES, ONLY]) writeFileSync(join(work, f), "");
   }, SETUP_TIMEOUT_MS);
 
   afterAll(() => {
@@ -432,6 +427,79 @@ describe.skipIf(process.platform !== "win32" || !HAS_PWSH)("PowerShell: what Tab
     const expected = run([`"ready plain"`], "MenuComplete without shellwise");
     expect(expected).toEqual(["PS> gc .\\zzalpha.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txtX"]);
     expect(run([INIT, `"ready ours"`], "MenuComplete with shellwise")).toEqual(expected);
+  }, TEST_TIMEOUT_MS);
+
+  // PSReadLine's default Tab, and the owner's setup.
+  const BINDINGS: [string, string[]][] = [
+    ["TabCompleteNext", []],
+    [
+      "the owner's MenuComplete",
+      [
+        "Set-PSReadLineOption -PredictionSource HistoryAndPlugin -PredictionViewStyle ListView",
+        "Set-PSReadLineKeyHandler -Chord Tab -Function MenuComplete",
+      ],
+    ],
+  ];
+
+  test.each(BINDINGS)("%s: a single completion, then Tab goes into the completed line's list", (label, lines) => {
+    const pid = start([...lines, INIT, `"ready ours"`]);
+    ready(pid, label);
+    const completedLine = `PS> gc .\\${ONLY}`;
+    const raw = `gc .\\${ONLY} -Raw`;
+    drive(pid, [{ type: "text", value: "gc on" }]);
+    waitForScreen(pid, "typed gc on", (rows) => promptText(rows) === "PS> gc on" && listItems(rows).length === 0);
+    drive(pid, [{ type: "key", value: "tab" }]);
+    const completed = waitForScreen(pid, "completed", (rows) => promptText(rows) === completedLine);
+    dump(`${label}: gc on + Tab`, completed);
+    if (listItems(completed).length > 0) {
+      // TabCompleteNext: the completed line's list shows at once. Completing
+      // again would change nothing, so this Tab goes into the list.
+      expect(listItems(completed).map((i) => i.text)).toContain(raw);
+      drive(pid, [{ type: "key", value: "tab" }]);
+    } else {
+      // MenuComplete: PSReadLine shows no list right after its completion,
+      // and Tab changes nothing there, as without shellwise (the marker
+      // shows the Tab ran). Typing brings the list, and Tab goes into it.
+      drive(pid, [{ type: "key", value: "tab" }, { type: "text", value: "X" }]);
+      waitForScreen(pid, "Tab, X", (rows) => promptText(rows) === `${completedLine}X`);
+      drive(pid, [{ type: "key", value: "backspace" }, { type: "text", value: " " }]);
+      waitForScreen(pid, "list after typing", (rows) => listItems(rows).some((i) => i.text === raw));
+      drive(pid, [{ type: "key", value: "tab" }]);
+    }
+    const listed = waitForScreen(pid, "into the list", (rows) => promptText(rows) === `PS> ${raw}`);
+    dump(`${label}: into the list`, listed);
+    expect(label === "TabCompleteNext").toBe(listItems(completed).length > 0);
+  }, TEST_TIMEOUT_MS);
+
+  test.each(BINDINGS)("%s: a Tab that completed nothing does not keep the list away; Tab walks the list", (label, lines) => {
+    const pid = start([...lines, INIT, `"ready ours"`]);
+    ready(pid, label);
+    try {
+      // The review's repro: no daemon, so no list for `git lo`, and nothing
+      // to complete there.
+      expect(box.cli(["daemon", "stop"])).toContain("Daemon stopped");
+      drive(pid, [{ type: "text", value: "git lo" }, { type: "key", value: "tab" }]);
+      waitForScreen(pid, "git lo, Tab", (rows) => promptText(rows) === "PS> git lo" && listItems(rows).length === 0);
+    } finally {
+      box.cli(["daemon", "start"]);
+    }
+    // The daemon is back: Backspace and `o` again bring the list.
+    drive(pid, [{ type: "key", value: "backspace" }, { type: "text", value: "o" }]);
+    const listed = waitForScreen(pid, "list for git lo", (rows) => promptText(rows) === "PS> git lo" && listItems(rows).length > 0);
+    const items = listItems(listed).map((i) => i.text);
+    expect(items).toContain("git log --oneline");
+    dump(`${label}: list after the empty Tab`, listed);
+    drive(pid, [{ type: "key", value: "tab" }]);
+    const first = waitForScreen(pid, "Tab", (rows) => promptText(rows) === `PS> ${items[0]}`);
+    dump(`${label}: Tab`, first);
+    drive(pid, [{ type: "key", value: "tab" }]);
+    waitForScreen(pid, "Tab, Tab", (rows) => promptText(rows) === `PS> ${items[1] ?? "git lo"}`);
+
+    // And with the list there from the start: the first Tab goes into it.
+    drive(pid, [escape, escape, { type: "text", value: "git lo" }]);
+    waitForScreen(pid, "typed again", (rows) => promptText(rows) === "PS> git lo" && listItems(rows).length > 0);
+    drive(pid, [{ type: "key", value: "tab" }]);
+    waitForScreen(pid, "Tab", (rows) => promptText(rows) === `PS> ${items[0]}`);
   }, TEST_TIMEOUT_MS);
 
   test("a Tab bound to the user's own script block keeps its job; Shift+Tab still walks the list", () => {

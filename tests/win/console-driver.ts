@@ -40,6 +40,7 @@ const KEYS = {
   "shift-tab": { vk: 9, ch: 9, flags: 0x10 }, // SHIFT_PRESSED
   enter: { vk: 13, ch: 13 },
   escape: { vk: 27, ch: 27 },
+  backspace: { vk: 8, ch: 8 },
   up: { vk: 0x26, ch: 0, flags: 0x100 }, // ENHANCED_KEY
   down: { vk: 0x28, ch: 0, flags: 0x100 },
   "ctrl-r": { vk: 0x52, ch: 0x12, flags: 0x08 }, // LEFT_CTRL_PRESSED

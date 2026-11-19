@@ -262,28 +262,39 @@ if ($global:__sw.BinPath -and (Get-Command -Name Set-PSReadLineKeyHandler -Error
 function global:__sw_tab([bool]$Forward, $Key, $Arg) {
     $line = $null; $cursor = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-    # Still the line the old function produced (a completion), with no command
-    # run since: carry on with it, so Tab cycles through the completions even
-    # when the completed line has a list of its own.
-    $continuing = $null -ne $global:__sw.FallbackLine -and $line -ceq $global:__sw.FallbackLine -and $global:__sw.FallbackAt -eq $global:__sw.LastId
-    if (-not $continuing) {
+    # Moves in the list; true when there was one to move in.
+    $moveInList = {
         if ($Forward) {
             [Microsoft.PowerShell.PSConsoleReadLine]::NextSuggestion($Key, $Arg)
         } else {
             [Microsoft.PowerShell.PSConsoleReadLine]::PreviousSuggestion($Key, $Arg)
         }
-        $after = $null
-        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)
-        if ($after -cne $line) {
-            $global:__sw.FallbackLine = $null
-            return
-        }
+        $now = $null; $at = $null
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$now, [ref]$at)
+        $now -cne $line
+    }
+    # Still the line the old function produced (a completion), with no command
+    # run since: carry on with it, so Tab cycles through the completions even
+    # when the completed line has a list of its own.
+    $continuing = $null -ne $global:__sw.FallbackLine -and $line -ceq $global:__sw.FallbackLine -and $global:__sw.FallbackAt -eq $global:__sw.LastId
+    if (-not $continuing -and (& $moveInList)) {
+        $global:__sw.FallbackLine = $null
+        return
     }
     $fn = if ($Forward) { $global:__sw.TabFallback } else { $global:__sw.ShiftTabFallback }
     [Microsoft.PowerShell.PSConsoleReadLine]::($fn).Invoke($Key, $Arg)
-    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-    $global:__sw.FallbackLine = $line
-    $global:__sw.FallbackAt = $global:__sw.LastId
+    $after = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)
+    if ($after -cne $line) {
+        $global:__sw.FallbackLine = $after
+        $global:__sw.FallbackAt = $global:__sw.LastId
+        return
+    }
+    # The old function changed nothing (one candidate, already complete; or
+    # none): nothing to carry on with. The list is first again, and when this
+    # press skipped it for the old function, it goes there now.
+    $global:__sw.FallbackLine = $null
+    if ($continuing) { $null = & $moveInList }
 }
 
 try {
