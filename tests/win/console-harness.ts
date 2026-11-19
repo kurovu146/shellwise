@@ -34,6 +34,36 @@ export function startHiddenConsole(file: string, args: string[], env: Record<str
   return pid;
 }
 
+/**
+ * Start `file args...` in a pseudo console (ConPTY), the kind Windows Terminal
+ * and VS Code give a shell: `conhost --headless` with a buffer exactly as tall
+ * as its window, so no scrollback. Returns the pid of `file` (what `drive`
+ * attaches to) and of the host (what to `killTree`; it ends with the client).
+ */
+export function startPseudoConsole(
+  file: string,
+  args: string[],
+  env: Record<string, string>,
+  size = { cols: 120, rows: 30 }
+): { pid: number; hostPid: number } {
+  const host = Bun.spawn(
+    ["conhost.exe", "--headless", "--width", String(size.cols), "--height", String(size.rows), "--", file, ...args],
+    // The VT stream conhost renders for its terminal is not needed: the
+    // driver reads the buffer. stdin stays open, as a terminal's would.
+    { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: { ...process.env, ...env }, windowsHide: true }
+  );
+  const query = `(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${host.pid}' | Where-Object Name -ne 'conhost.exe' | Select-Object -First 1).ProcessId`;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const p = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", query]);
+    const pid = Number.parseInt(p.stdout.toString().trim(), 10);
+    if (Number.isInteger(pid)) return { pid, hostPid: host.pid };
+    Bun.sleepSync(100);
+  }
+  killTree(host.pid);
+  throw new Error(`no client process appeared under conhost --headless (pid ${host.pid})`);
+}
+
 /** Run `steps` against the console of `pid`; returns the captured screens. */
 export function drive(pid: number, steps: Step[]): Screen[] {
   const dir = mkdtempSync(join(tmpdir(), "sw-drive-"));

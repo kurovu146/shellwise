@@ -47,30 +47,30 @@ $global:__sw = @{
     Session    = [guid]::NewGuid().ToString()
     LastId     = -1
     LastOk     = $true
+    InPrompt   = $false
     HasHelper  = $false
     OrigPrompt = $function:prompt
     BinPath    = $null
 }
-# Loaded again (a reloaded profile) while our wrapper is still the prompt:
-# wrapping it once more would make the prompt call itself forever.
-if ($__swPrev -and "$function:prompt" -match '__sw_record') {
-    $global:__sw.OrigPrompt = $__swPrev.OrigPrompt
+$__swPrevOrig = $null
+if ($__swPrev) {
+    # Loaded again in the same shell: same session, and what was already
+    # recorded stays recorded.
     $global:__sw.Session = $__swPrev.Session
-}
-if (-not $global:__sw.OrigPrompt) {
-    $global:__sw.OrigPrompt = { "PS $($executionContext.SessionState.Path.CurrentLocation)> " }
+    $global:__sw.LastId = $__swPrev.LastId
+    $__swPrevOrig = $__swPrev.OrigPrompt
+} else {
+    $__swLast = Get-History -Count 1
+    if ($__swLast) { $global:__sw.LastId = $__swLast.Id }
 }
 $__swCmd = Get-Command -Name $global:__sw.Bin -CommandType Application -ErrorAction Ignore | Select-Object -First 1
 if ($__swCmd) { $global:__sw.BinPath = $__swCmd.Path }
-$__swLast = Get-History -Count 1
-if ($__swLast) { $global:__sw.LastId = $__swLast.Id }
-Remove-Variable -Name __swPrev, __swCmd, __swLast -ErrorAction Ignore
 
 # --- Command capture ---
 
 function global:__sw_spawn([string[]]$SwArgs, [hashtable]$EnvVars) {
-    # Fire-and-forget with no window. Values travel in env vars, never on the
-    # command line, whose quoting would mangle them.
+    # Fire-and-forget in a hidden window. Values travel in env vars, never on
+    # the command line, whose quoting would mangle them.
     if (-not $global:__sw.BinPath) { return }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     if ($global:__sw.BinPath -match '\.(cmd|bat)$') {
@@ -80,13 +80,26 @@ function global:__sw_spawn([string[]]$SwArgs, [hashtable]$EnvVars) {
         $psi.FileName = $global:__sw.BinPath
         $psi.Arguments = $SwArgs -join ' '
     }
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    foreach ($k in $EnvVars.Keys) { $psi.EnvironmentVariables[$k] = [string]$EnvVars[$k] }
+    # ShellExecute, not CreateProcess: CreateProcess hands the child every
+    # inheritable handle of this shell, its stdout pipe included, and the
+    # daemon started down that chain would keep a caller that reads this
+    # shell's output to EOF waiting until the daemon stops. ShellExecute
+    # passes no handles, so the values go in through this process's
+    # environment, set just for the spawn.
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $saved = @{}
     try {
+        foreach ($k in $EnvVars.Keys) {
+            $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+            [Environment]::SetEnvironmentVariable($k, [string]$EnvVars[$k])
+        }
         $p = [System.Diagnostics.Process]::Start($psi)
         if ($p) { $p.Dispose() }
-    } catch {}
+    } catch {
+    } finally {
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
 }
 
 function global:__sw_record([bool]$Ok, $Code) {
@@ -104,19 +117,50 @@ function global:__sw_record([bool]$Ok, $Code) {
     }
 }
 
-function global:prompt {
-    $__swOk = $?
-    # Unset until a native command has run: see Get-Variable above.
-    $__swCode = Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore
-    try {
-        $global:__sw.LastOk = $__swOk
-        __sw_record $__swOk $__swCode
-    } catch {}
-    # Hand the real status on to the wrapped prompt (oh-my-posh, starship, ...).
-    if ($null -ne $__swCode) { $global:LASTEXITCODE = $__swCode }
-    if ($__swOk) { $null = 1 } else { Write-Error '' -ErrorAction Ignore }
-    & $global:__sw.OrigPrompt
+# Returns a prompt that records the last command, then calls $Orig. Each
+# wrapper keeps the prompt it captured itself, never a shared slot: when a
+# tool (a venv's Activate.ps1, zoxide) has wrapped ours and this script is
+# loaded again, the new wrapper calls that tool's prompt, which calls the old
+# wrapper, which still calls the original. No load can make a cycle.
+function global:__sw_wrap([scriptblock]$Orig) {
+    $swOrig = $Orig
+    {
+        $__swOk = $?
+        if ($global:__sw.InPrompt) {
+            # Inside our own outer wrapper: it has recorded already, so only
+            # hand the status on.
+            if ($__swOk) { $null = 1 } else { Write-Error '' -ErrorAction Ignore }
+            & $swOrig
+            return
+        }
+        # Unset until a native command has run: see Get-Variable above.
+        $__swCode = Get-Variable -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore
+        try {
+            $global:__sw.LastOk = $__swOk
+            __sw_record $__swOk $__swCode
+        } catch {}
+        # Hand the real status on to the wrapped prompt (oh-my-posh, starship, ...).
+        if ($null -ne $__swCode) { $global:LASTEXITCODE = $__swCode }
+        $global:__sw.InPrompt = $true
+        try {
+            if ($__swOk) { $null = 1 } else { Write-Error '' -ErrorAction Ignore }
+            & $swOrig
+        } finally {
+            $global:__sw.InPrompt = $false
+        }
+    }.GetNewClosure()
 }
+
+if ("$function:prompt" -match '__sw_record') {
+    # Our wrapper is still on top (the script loaded twice in a row): keep it.
+    $global:__sw.OrigPrompt = $__swPrevOrig
+} else {
+    if (-not $global:__sw.OrigPrompt) {
+        $global:__sw.OrigPrompt = { "PS $($executionContext.SessionState.Path.CurrentLocation)> " }
+    }
+    Set-Item -Path function:global:prompt -Value (__sw_wrap $global:__sw.OrigPrompt)
+}
+Remove-Variable -Name __swPrev, __swPrevOrig, __swCmd, __swLast -ErrorAction Ignore
 
 # The socket file survives logoff and killed daemons on Windows, so its
 # presence proves nothing. Always ask (hidden, non-blocking): daemon start
@@ -142,13 +186,22 @@ if ($global:__sw.BinPath -and (Get-Command -Name Set-PSReadLineKeyHandler -Error
             $selected = & $global:__sw.BinPath search
             # The search's exit must not change the status the prompt shows.
             if ($null -ne $prevCode) { $global:LASTEXITCODE = $prevCode } else { Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction Ignore }
-            # The TUI drew over the prompt line. Redraw it with the last
-            # command's $?: InvokePrompt would otherwise show this handler's.
+            # The TUI drew over the prompt line and left the cursor at the start
+            # of that line. Redraw the prompt there, not where PSReadLine last
+            # put it: to make room for its frame the TUI may have scrolled the
+            # buffer, which a pseudo console (Windows Terminal, VS Code) always
+            # does since it has no scrollback, and the old row is then stale.
+            $top = [Console]::CursorTop - (Get-PSReadLineOption).ExtraPromptLineCount
+            if ($top -lt 0) { $top = 0 }
+            # With the last command's $?: InvokePrompt would otherwise show this
+            # handler's own.
             if ($global:__sw.LastOk) { $null = 1 } else { Write-Error '' -ErrorAction Ignore }
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt($null, $top)
             if ($selected) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($selected -join [char]10))
+                # Replace what was typed. RevertLine + Insert appended the choice
+                # to it while a prediction list was showing (RevertLine then
+                # only closes the list).
+                [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, ($selected -join [char]10))
             }
         } finally {
             Remove-Item -Path Env:SW_QUERY -ErrorAction Ignore

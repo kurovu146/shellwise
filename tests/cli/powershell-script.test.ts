@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -40,7 +41,7 @@ describe("generatePowerShellScript", () => {
 
   test("binds Ctrl+R and wraps the prompt", () => {
     expect(script).toContain("Set-PSReadLineKeyHandler -Chord 'Ctrl+r'");
-    expect(script).toContain("function global:prompt");
+    expect(script).toContain("Set-Item -Path function:global:prompt");
   });
 
   test("is pure ASCII, whatever the paths contain", () => {
@@ -91,6 +92,16 @@ describe("add --from-env", () => {
     expect(r.code).toBe(0);
     expect(r.err).toBe("");
     expect(cli(["suggest", "--query", 'echo "a b']).out.split("\n")).toContain(tricky);
+    // Every field landed in its own column, read straight from the DB.
+    const db = new Database(join(dir, "data", "shellwise", "history.db"), { readonly: true });
+    try {
+      const row = db
+        .query("SELECT cwd, exit_code, duration_ms, session_id, shell FROM commands WHERE command = ?")
+        .get(tricky);
+      expect(row).toEqual({ cwd: "C:\\work", exit_code: 0, duration_ms: 12, session_id: "s-1", shell: "powershell" });
+    } finally {
+      db.close();
+    }
   });
 
   test("skips a failed command", () => {
@@ -109,6 +120,8 @@ describe("add --from-env", () => {
 // Every shell available here must parse the script and load it without error:
 // pwsh 7 and, on Windows, PowerShell 5.1, whose parser and .NET are older.
 const SHELLS = ["pwsh", "powershell.exe"].filter((s) => Bun.which(s) !== null);
+// A cold PowerShell start alone can pass the default 5 s on a loaded machine.
+const SHELL_TIMEOUT_MS = 20_000;
 
 describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shell) => {
   const run = (command: string) => {
@@ -130,20 +143,73 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
     );
     expect(r.err).toBe("");
     expect(r.out).toBe("0");
-  });
+  }, SHELL_TIMEOUT_MS);
 
-  test.skipIf(SHELLS.length === 0)("loads twice without errors and wraps the original prompt once", () => {
-    const s = generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: dir });
-    const f = scriptFile("load", s);
-    // Sourcing again (a reloaded profile) must not wrap our own wrapper: the
-    // prompt would then call itself until the stack overflowed. Strict mode,
-    // with no native command run yet, leaves $LASTEXITCODE unset: reading it
-    // would throw.
+  // Loading the script again (a reloaded profile, the init line run by hand)
+  // must never make the prompt call itself, whatever wrapped it in between.
+  // A recursing prompt only dies of "call depth overflow" after 30-60 s, so
+  // the test timeout catches it. Strict mode, with no native command run yet,
+  // also leaves $LASTEXITCODE unset: reading it would throw.
+  test.skipIf(SHELLS.length === 0).each([
+    ["twice in a row", "", "orig> "],
+    // Python's venv Activate.ps1 and zoxide: keep the current prompt, call it.
+    ["after a tool wrapped the prompt", "$global:old = $function:prompt; function global:prompt { 'venv ' + (& $global:old) }", "venv orig> "],
+    ["after the prompt was replaced", "function global:prompt { 'user> ' }", "user> "],
+  ])("loads again %s: one prompt, recorded once, same session", (_, between, expected) => {
+    const f = scriptFile("reload", generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: dir }));
     const load = `Invoke-Expression (Get-Content -Raw '${f}')`;
-    const r = run(`Set-StrictMode -Version Latest; function prompt { 'orig> ' }; ${load}; ${load}; prompt; $Error.Count`);
+    const r = run(
+      [
+        "Set-StrictMode -Version Latest",
+        "function prompt { 'orig> ' }",
+        load,
+        "$s1 = $global:__sw.Session",
+        between,
+        load,
+        // What the prompt would record, without a binary to record with.
+        "$global:rec = @(); function global:__sw_spawn($a, $e) { if ($a[0] -eq 'add') { $global:rec += $e.SW_ADD_COMMAND } }",
+        "$now = Get-Date; $done = [System.Management.Automation.Runspaces.PipelineState]::Completed",
+        "Add-History -InputObject ([pscustomobject]@{ CommandLine = 'echo one'; ExecutionStatus = $done; StartExecutionTime = $now; EndExecutionTime = $now })",
+        // A second prompt with no new command records nothing more.
+        "'out=' + (prompt)",
+        "'out=' + (prompt)",
+        "'rec=' + ($global:rec -join '|')",
+        "'same-session=' + ($s1 -eq $global:__sw.Session)",
+        "'errors=' + $Error.Count",
+      ].join("; ")
+    );
     expect(r.err).toBe("");
-    expect(r.out.split(/\r?\n/).map((l) => l.trimEnd())).toEqual(["orig>", "0"]);
-  });
+    expect(r.out.split(/\r?\n/)).toEqual([
+      `out=${expected}`,
+      `out=${expected}`,
+      "rec=echo one",
+      "same-session=True",
+      "errors=0",
+    ]);
+  }, SHELL_TIMEOUT_MS);
+
+  test.skipIf(SHELLS.length === 0)("does not record a multi-line command", () => {
+    // The daemon's protocol is one line per request. (Through a live daemon the
+    // broken-up request happens to store nothing; the DB fallback would.)
+    const f = scriptFile("multi", generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: dir }));
+    const add = (line: string) =>
+      `Add-History -InputObject ([pscustomobject]@{ CommandLine = ${line}; ExecutionStatus = $done; StartExecutionTime = $now; EndExecutionTime = $now })`;
+    const r = run(
+      [
+        "function prompt { 'orig> ' }",
+        `Invoke-Expression (Get-Content -Raw '${f}')`,
+        "$global:rec = @(); function global:__sw_spawn($a, $e) { if ($a[0] -eq 'add') { $global:rec += $e.SW_ADD_COMMAND } }",
+        "$now = Get-Date; $done = [System.Management.Automation.Runspaces.PipelineState]::Completed",
+        add('"if (1) {`necho multi-1 }"'),
+        "$null = prompt",
+        add("'echo two'"),
+        "$null = prompt",
+        "'rec=' + ($global:rec -join '|')",
+      ].join("; ")
+    );
+    expect(r.err).toBe("");
+    expect(r.out).toBe("rec=echo two");
+  }, SHELL_TIMEOUT_MS);
 
   test.skipIf(SHELLS.length === 0)("keeps a non-ASCII path intact", () => {
     const sock = "C:\\Users\\Tuấn\\it's.sock";
@@ -152,5 +218,5 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
     const r = run(`Invoke-Expression (Get-Content -Raw '${f}'); ($global:__sw.Socket.ToCharArray() | ForEach-Object { [int]$_ }) -join ','`);
     expect(r.err).toBe("");
     expect(r.out).toBe([...sock].map((c) => c.charCodeAt(0)).join(","));
-  });
+  }, SHELL_TIMEOUT_MS);
 });
