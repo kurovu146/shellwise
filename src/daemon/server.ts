@@ -6,6 +6,7 @@ import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
 import { parseRequest, getSocketPath, getPidPath, formatSuggestResponse } from "./protocol";
 import { FRECENCY_EXPR } from "../db/frecency";
 import { unlinkSync, writeFileSync, existsSync, chmodSync } from "fs";
+import { daemonRequest } from "./client";
 import type { Socket } from "bun";
 
 // Reject a connection that floods us without ever sending a newline.
@@ -246,7 +247,25 @@ export function isDaemonRunning(): boolean {
   }
 }
 
-export function getDaemonInfo(): { pid: number } | null {
+/**
+ * "Running" for the CLI's decisions: the pid is alive AND the socket answers
+ * PING. A pid file alone proves little on Windows, where %TEMP% survives
+ * reboots and pids are recycled. A live pid that does not answer is treated as
+ * stale: both endpoint files are removed so a fresh daemon can take over.
+ */
+export async function isDaemonResponsive(): Promise<boolean> {
+  if (!isDaemonRunning()) return false;
+  const reply = await daemonRequest("PING\n");
+  if (reply?.[0] === "PONG") return true;
+  for (const path of [getPidPath(), getSocketPath()]) {
+    try {
+      unlinkSync(path);
+    } catch {}
+  }
+  return false;
+}
+
+export function getDaemonInfo():{ pid: number } | null {
   const pidPath = getPidPath();
   if (!existsSync(pidPath)) return null;
   try {

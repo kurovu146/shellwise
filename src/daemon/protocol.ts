@@ -133,15 +133,26 @@ export function endpointPaths(env: {
   return { socket: `${base}.sock`, pid: `${base}.pid` };
 }
 
-// SHELLWISE_SOCKET is an internal test-isolation hook, not a user setting.
+function currentUsername(): string {
+  // userInfo() throws on accounts without a resolvable user entry.
+  try {
+    return userInfo().username;
+  } catch {
+    return process.env.USERNAME || "user";
+  }
+}
+
+// SHELLWISE_DAEMON_SOCKET is an internal test-isolation hook, not a user
+// setting. Deliberately not SHELLWISE_SOCKET: `sw ssh` exports that into
+// remote shells as the forwarded-socket path, and the CLI must not obey it.
 function currentEndpoint(): { socket: string; pid: string } {
-  const override = process.env.SHELLWISE_SOCKET;
-  if (override) return { socket: override, pid: override.replace(/.sock$/, "") + ".pid" };
+  const override = process.env.SHELLWISE_DAEMON_SOCKET;
+  if (override) return { socket: override, pid: override.replace(/\.sock$/, "") + ".pid" };
   return endpointPaths({
     platform: process.platform,
     uid: process.getuid?.(),
     pid: process.pid,
-    username: process.platform === "win32" ? userInfo().username : "",
+    username: process.platform === "win32" ? currentUsername() : "",
     tmpdir: tmpdir(),
   });
 }

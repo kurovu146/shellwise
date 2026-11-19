@@ -12,7 +12,7 @@ import { runPrune } from "./cli/prune";
 import { deleteCommand } from "./db/queries";
 import { closeDb } from "./db/connection";
 import { checkForUpdate } from "./utils/update-check";
-import { startServer, isDaemonRunning, getDaemonInfo } from "./daemon/server";
+import { startServer, isDaemonRunning, isDaemonResponsive, getDaemonInfo } from "./daemon/server";
 import { daemonRequest } from "./daemon/client";
 import { getSocketPath } from "./daemon/protocol";
 import { selfCommand } from "./utils/self";
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
         const sub = args[1];
         switch (sub) {
           case "start": {
-            if (isDaemonRunning()) {
+            if (await isDaemonResponsive()) {
               console.log("Daemon already running.");
               return;
             }
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
             startServer();
             break;
           case "stop": {
-            if (!isDaemonRunning()) {
+            if (!(await isDaemonResponsive())) {
               console.log("Daemon not running.");
               return;
             }
@@ -198,11 +198,15 @@ async function main(): Promise<void> {
             while (isDaemonRunning() && Date.now() < stopDeadline) {
               await new Promise((r) => setTimeout(r, 50));
             }
+            if (isDaemonRunning()) {
+              console.error(`Failed to stop daemon (pid: ${getDaemonInfo()?.pid}).`);
+              process.exit(1);
+            }
             console.log("Daemon stopped.");
             break;
           }
           case "status": {
-            if (isDaemonRunning()) {
+            if (await isDaemonResponsive()) {
               const info = getDaemonInfo();
               console.log(`Daemon running (pid: ${info?.pid})`);
             } else {

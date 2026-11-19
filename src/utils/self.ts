@@ -4,7 +4,7 @@
  * its real path in execPath; script mode is the reverse (execPath is bun).
  */
 export function isCompiled(main: string = Bun.main): boolean {
-  return main.startsWith("/$bunfs") || /^[A-Za-z]:[\/]~BUN[\/]/.test(main);
+  return main.startsWith("/$bunfs") || /^[A-Za-z]:[\\/]~BUN[\\/]/.test(main);
 }
 
 export function selfCommand(): string[] {

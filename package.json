@@ -42,6 +42,7 @@
   },
   "homepage": "https://github.com/kurovu146/shellwise#readme",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
   }
 }
