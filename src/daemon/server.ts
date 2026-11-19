@@ -176,19 +176,33 @@ export async function startServer(): Promise<void> {
   if (!(await takePidFile(pidPath))) process.exit(0);
 
   try {
-    // A leftover socket file of a daemon that died.
+    initPreparedStatements();
+    // Test-only: lets a test make this start slower than the grace.
+    const delay = Number(process.env.SHELLWISE_TEST_BIND_DELAY_MS ?? 0);
+    if (delay > 0) await Bun.sleep(delay);
+    // Slower than the grace, this start may have been judged stale and
+    // another one taken the pid file: then the socket path is that one's
+    // (it may be serving there already). Leave it alone.
+    if (!ownsPidFile()) process.exit(0);
+    // A leftover socket file of a daemon that died (or of one that lost the
+    // pid file to us and left): removed right before the bind, not earlier.
     if (existsSync(socketPath)) {
       try {
         unlinkSync(socketPath);
       } catch {}
     }
-    initPreparedStatements();
     listen(socketPath);
   } catch (e) {
     // Give the lock back, or every later start would wait for this one.
     removePidFileIf(`${process.pid}`);
     throw e;
   }
+
+  // The same, when the pid file was taken while this one was binding. The
+  // owner removes this socket file right before its own bind: leave without
+  // stopping the listener, since stopping it deletes whatever is at the
+  // socket path (on Windows), which may already be the owner's.
+  if (!ownsPidFile()) process.exit(0);
 
   resetIdleTimer();
 
@@ -278,10 +292,13 @@ function removePidFileIf(content: string): void {
  * Who holds the endpoint. Live: the pid file's pid is alive and somebody is
  * listening on the socket (answering, or connected but busy). A live pid that
  * does not answer yet is waited for while its pid file is younger than
- * START_GRACE_MS. Otherwise not live, with the pid file content judged stale
- * (null when there is no pid file).
+ * START_GRACE_MS, and for at most that long in all, timed by this process:
+ * the file's mtime can be in the future after the clock was set back.
+ * Otherwise not live, with the pid file content judged stale (null when
+ * there is no pid file).
  */
 async function endpointOwner(): Promise<{ live: true } | { live: false; content: string | null }> {
+  const waitUntil = performance.now() + START_GRACE_MS;
   while (true) {
     const content = readPidFile();
     if (content === null || !pidAlive(pidOf(content))) return { live: false, content };
@@ -290,7 +307,7 @@ async function endpointOwner(): Promise<{ live: true } | { live: false; content:
     try {
       age = Date.now() - statSync(getPidPath()).mtimeMs;
     } catch {}
-    if (age >= START_GRACE_MS) return { live: false, content };
+    if (age >= START_GRACE_MS || performance.now() >= waitUntil) return { live: false, content };
     await Bun.sleep(50);
   }
 }

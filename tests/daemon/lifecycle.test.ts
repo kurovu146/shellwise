@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, renameSync, rmdirSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "fs";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { connect, createServer } from "net";
 import { Database } from "bun:sqlite";
 import { probeDaemon } from "../../src/daemon/client";
+import { daemonPids as findDaemonPids, runsDaemon } from "./daemon-processes";
 
 // Spawns real daemons, so everything they touch lives in a private temp dir:
 // own socket, pid file and history DB. Never the developer's real ones.
@@ -359,27 +360,18 @@ describe("endpoint ownership on exit", () => {
   }, 20000);
 });
 
-/**
- * Pids of every `daemon _run` of this checkout's entry point, from the process
- * table (Win32_Process on Windows, ps elsewhere): a daemon that lost its
- * socket and pid file to another one is still listed here.
- */
-function daemonPids(): number[] {
-  const marker = `${ENTRY} daemon _run`.toLowerCase();
-  if (process.platform === "win32") {
-    const query = `Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
-    const out = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", query]).stdout.toString();
-    return out
-      .split(/\r?\n/)
-      .filter((l) => l.toLowerCase().includes(marker))
-      .map((l) => parseInt(l));
-  }
-  const out = Bun.spawnSync(["ps", "-axo", "pid=,args="]).stdout.toString();
-  return out
-    .split("\n")
-    .filter((l) => l.toLowerCase().includes(marker))
-    .map((l) => parseInt(l.trim()));
-}
+/** Pids of every `daemon _run` of this checkout's entry point. */
+const daemonPids = () => findDaemonPids(basename(process.execPath), ENTRY);
+
+describe("finding daemon processes", () => {
+  test("a quoted program path with a space still matches", () => {
+    const program = process.platform === "win32" ? "C:\\work\\sp ace\\src\\index.ts" : "/work/sp ace/src/index.ts";
+    expect(runsDaemon(`bun.exe "${program}" daemon _run`, program)).toBe(true);
+    expect(runsDaemon(`bun ${program} daemon _run`, program)).toBe(true);
+    expect(runsDaemon(`bun "${program}" daemon start`, program)).toBe(false);
+    expect(runsDaemon(`bun "${program.replace("sp ace", "other")}" daemon _run`, program)).toBe(false);
+  });
+});
 
 describe("concurrent starts", () => {
   test("six `daemon start` at once leave exactly one daemon, round after round", async () => {
@@ -443,6 +435,88 @@ describe("a daemon still starting", () => {
       await killDaemon(pid);
     }
   }, 20000);
+
+  test("a pid file dated in the future is waited for at most the grace, by this process's clock", async () => {
+    // A clock set back since the file was written (time sync, dual boot, a
+    // restored backup): by its mtime, the file would look young for an hour.
+    const env = envFor("future");
+    const pidFile = join(dir, "future.pid");
+    const writeFuturePidFile = () => {
+      writeFileSync(pidFile, String(process.pid));
+      const inAnHour = new Date(Date.now() + 3600_000);
+      utimesSync(pidFile, inAnHour, inAnHour);
+    };
+    let pid = 0;
+    try {
+      writeFuturePidFile();
+      let t0 = Date.now();
+      const status = await sw(env, "daemon", "status");
+      expect({ code: status.code, out: status.out.trim(), ms: Date.now() - t0 < 8000 }).toEqual({
+        code: 0,
+        out: "Daemon not running.",
+        ms: true,
+      });
+
+      writeFuturePidFile();
+      t0 = Date.now();
+      const start = await sw(env, "daemon", "start");
+      expect({ code: start.code, started: start.out.includes("Daemon started"), ms: Date.now() - t0 < 10000 }).toEqual({
+        code: 0,
+        started: true,
+        ms: true,
+      });
+      pid = parseInt(readFileSync(pidFile, "utf-8"));
+      expect(pid).not.toBe(process.pid);
+      expect(await rawRequest(env.SHELLWISE_DAEMON_SOCKET, "PING\n")).toContain("PONG");
+    } finally {
+      await killDaemon(pid);
+    }
+  }, 45_000);
+});
+
+// A daemon that takes longer than the grace between its pid file and its bind
+// (made so with a test-only delay) is judged stale and taken over by a later
+// start. The test delays both; the later one binds last.
+describe("a daemon slower than the grace", () => {
+  // [slow one's delay, later one's delay]: the slow one binds first, or last.
+  test.each([
+    ["binds before the later start", 3500, 1000],
+    ["wakes after the later start has bound", 5000, 0],
+  ])("%s: it leaves without touching the socket; one daemon, holding the pid file", async (_, slowDelay, lateDelay) => {
+    const env = envFor(`slow-${slowDelay}`);
+    const pidFile = join(dir, `slow-${slowDelay}.pid`);
+    const foreign = new Set(daemonPids());
+    const ours = () => daemonPids().filter((p) => !foreign.has(p));
+    const run = (delayMs: number) =>
+      Bun.spawn([process.execPath, ENTRY, "daemon", "_run"], {
+        env: { ...env, SHELLWISE_TEST_BIND_DELAY_MS: String(delayMs) },
+        cwd: dir,
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+    try {
+      const slow = run(slowDelay);
+      const deadline = Date.now() + 5000;
+      while (!existsSync(pidFile) && Date.now() < deadline) await Bun.sleep(20);
+      expect(parseInt(readFileSync(pidFile, "utf-8"))).toBe(slow.pid);
+      // Waits out the grace (3 s) and takes the pid file.
+      const late = run(lateDelay);
+      await Promise.race([slow.exited, Bun.sleep(10_000)]);
+      let answer = "";
+      const until = Date.now() + 10_000;
+      while (!answer && Date.now() < until) {
+        answer = await rawRequest(env.SHELLWISE_DAEMON_SOCKET, "PING\n").catch(() => "");
+        if (!answer) await Bun.sleep(100);
+      }
+      const holder = existsSync(pidFile) ? parseInt(readFileSync(pidFile, "utf-8")) : null;
+      expect({ answer, alive: ours(), pidFile: holder }).toEqual({
+        answer: "PONG\n\n",
+        alive: [late.pid],
+        pidFile: late.pid,
+      });
+    } finally {
+      for (const pid of ours()) await killDaemon(pid);
+    }
+  }, 30_000);
 });
 
 describe("unreachable socket", () => {
