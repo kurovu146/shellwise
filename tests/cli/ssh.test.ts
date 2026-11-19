@@ -74,7 +74,10 @@ describe("buildRemoteCommand", () => {
 // catches a decoder that silently writes an empty .zshrc — which would drop the
 // user into a zsh with none of their own config loaded.
 describe("buildRemoteCommand — executed for real", () => {
-  const zshAvailable = Bun.spawnSync(["sh", "-c", "command -v zsh"]).exitCode === 0;
+  // Detected by capability, not platform: Windows has no POSIX sh unless one is installed.
+  const shAvailable = Bun.which("sh") !== null;
+  const zshAvailable = shAvailable && Bun.which("zsh") !== null;
+  const stubToolsAvailable = shAvailable && Bun.which("ln") !== null && Bun.which("chmod") !== null;
 
   test.if(zshAvailable)("the remote zsh actually loads the shipped config", async () => {
     const command = buildRemoteCommand({
@@ -93,7 +96,7 @@ describe("buildRemoteCommand — executed for real", () => {
     expect(out).toContain("SHIPPED-CONFIG-LOADED");
   });
 
-  test("drops into the host's own shell when zsh is missing", async () => {
+  test.if(shAvailable && stubToolsAvailable)("drops into the host's own shell when zsh is missing", async () => {
     // A clean Ubuntu/Debian server has bash and dash but no zsh, so this is a
     // common path, not an edge case.
     const stubDir = `/tmp/sw-test-nozsh-${process.pid}`;
@@ -104,7 +107,7 @@ describe("buildRemoteCommand — executed for real", () => {
     }
     const sock = `/tmp/sw-test-nozsh-${process.pid}.sock`;
 
-    const proc = Bun.spawn(["sh", "-c", buildRemoteCommand({ zshrc: "# unused", socketPath: sock })], {
+    const proc = Bun.spawn([Bun.which("sh") ?? "sh", "-c", buildRemoteCommand({ zshrc: "# unused", socketPath: sock })], {
       env: { PATH: stubDir, SHELL: "/bin/sh", HOME: process.env.HOME ?? "/tmp" },
       stdin: new Blob(["echo LANDED-IN=$0\n"]),
       stdout: "pipe",
@@ -124,7 +127,7 @@ describe("buildRemoteCommand — executed for real", () => {
     expect(exitCode).toBe(0);
   });
 
-  test.if(zshAvailable)("falls back to a normal shell when no decoder works", async () => {
+  test.if(zshAvailable && stubToolsAvailable)("falls back to a normal shell when no decoder works", async () => {
     // Shadow every decoder with a failing stub, the way a stripped-down host
     // without base64 or openssl would behave.
     const stubDir = `/tmp/sw-test-stub-${process.pid}`;

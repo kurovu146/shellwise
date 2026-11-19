@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 export function hasFish(): boolean {
-  return Bun.spawnSync(["which", "fish"]).exitCode === 0;
+  return Bun.which("fish") !== null;
 }
 
 /** set_color prints escapes even when stdout is not a tty, so tests strip them. */

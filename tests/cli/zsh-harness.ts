@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 export function hasZsh(): boolean {
-  return Bun.spawnSync(["which", "zsh"]).exitCode === 0;
+  return Bun.which("zsh") !== null;
 }
 
 /**

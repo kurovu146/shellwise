@@ -15,7 +15,7 @@ import { join } from "path";
 import type { Subprocess } from "bun";
 
 const zsh = hasZsh();
-const tmux = Bun.spawnSync(["which", "tmux"]).exitCode === 0;
+const tmux = Bun.which("tmux") !== null;
 const SESSION = "sw-async";
 
 let daemonProc: Subprocess | null = null;

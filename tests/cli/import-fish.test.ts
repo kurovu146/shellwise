@@ -81,6 +81,8 @@ describe("sw import fish", () => {
         env: {
           ...process.env,
           HOME: home,
+          // os.homedir() reads USERPROFILE on Windows.
+          USERPROFILE: home,
           XDG_DATA_HOME: join(home, "data-cli"),
         },
       }

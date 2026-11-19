@@ -11,7 +11,7 @@ import { join } from "path";
 import type { Subprocess } from "bun";
 
 const fish = hasFish();
-const tmux = Bun.spawnSync(["which", "tmux"]).exitCode === 0;
+const tmux = Bun.which("tmux") !== null;
 const SESSION = "sw-fish-e2e";
 
 let daemonProc: Subprocess | null = null;
