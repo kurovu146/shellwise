@@ -38,7 +38,36 @@ export function runImport(shell?: string): void {
     }
   }
 
+  if (!shell || shell === "powershell") {
+    const paths = powerShellHistoryPaths({
+      platform: process.platform,
+      home,
+      appData: process.env.APPDATA,
+    });
+    for (const psPath of paths) {
+      if (!existsSync(psPath)) continue;
+      const result = importPowerShellHistory(psPath, existing, seen);
+      imported += result.imported;
+      skipped += result.skipped;
+    }
+  }
+
   console.log(`Imported ${imported} commands. Skipped ${skipped} duplicates.`);
+}
+
+/** Where PSReadLine keeps ConsoleHost_history.txt for the given platform. */
+export function powerShellHistoryPaths(env: {
+  platform: NodeJS.Platform;
+  home: string;
+  appData?: string;
+}): string[] {
+  if (env.platform === "win32") {
+    const appData = env.appData || join(env.home, "AppData", "Roaming");
+    return [
+      join(appData, "Microsoft", "Windows", "PowerShell", "PSReadLine", "ConsoleHost_history.txt"),
+    ];
+  }
+  return [join(env.home, ".local", "share", "powershell", "PSReadLine", "ConsoleHost_history.txt")];
 }
 
 interface ImportResult {
@@ -130,6 +159,45 @@ export function importFishHistory(
       skipped++;
     }
   }
+
+  return { imported, skipped };
+}
+
+/**
+ * ConsoleHost_history.txt holds one command per line; a multi-line command is
+ * written with a trailing backtick on every line but the last. The file is
+ * UTF-8 and Windows PowerShell 5.1 may prefix a BOM, which would otherwise
+ * stick to the first command.
+ */
+export function importPowerShellHistory(
+  path: string,
+  existing: Set<string>,
+  seen: Set<string>
+): ImportResult {
+  const content = readFileSync(path, "utf-8").replace(/^﻿/, "");
+  let imported = 0;
+  let skipped = 0;
+  const hostname = getHostname();
+  let pending: string[] = [];
+
+  const flush = (): void => {
+    const cmd = pending.join("\n").trim();
+    pending = [];
+    if (cmd.length < 2) return;
+    if (tryInsert(cmd, "powershell", hostname, existing, seen)) {
+      imported++;
+    } else {
+      skipped++;
+    }
+  };
+
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    pending.push(line);
+    if (!line.endsWith("`")) flush();
+  }
+  // A file may end in the middle of a continuation.
+  if (pending.length > 0) flush();
 
   return { imported, skipped };
 }
