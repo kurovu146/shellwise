@@ -69,8 +69,8 @@ if ($__swCmd) { $global:__sw.BinPath = $__swCmd.Path }
 # --- Command capture ---
 
 function global:__sw_spawn([string[]]$SwArgs, [hashtable]$EnvVars) {
-    # Fire-and-forget in a hidden window. Values travel in env vars, never on
-    # the command line, whose quoting would mangle them.
+    # Fire-and-forget with no window. Values travel in the child's env vars,
+    # never on the command line, whose quoting would mangle them.
     if (-not $global:__sw.BinPath) { return }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     if ($global:__sw.BinPath -match '\.(cmd|bat)$') {
@@ -80,26 +80,19 @@ function global:__sw_spawn([string[]]$SwArgs, [hashtable]$EnvVars) {
         $psi.FileName = $global:__sw.BinPath
         $psi.Arguments = $SwArgs -join ' '
     }
-    # ShellExecute, not CreateProcess: CreateProcess hands the child every
-    # inheritable handle of this shell, its stdout pipe included, and the
-    # daemon started down that chain would keep a caller that reads this
-    # shell's output to EOF waiting until the daemon stops. ShellExecute
-    # passes no handles, so the values go in through this process's
-    # environment, set just for the spawn.
-    $psi.UseShellExecute = $true
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $saved = @{}
+    # CreateProcess (not ShellExecute, which would run the Windows zone check
+    # on a downloaded binary each time). The child gets its own copy of the
+    # environment with the values added; this shell's is never touched. It
+    # also inherits this shell's inheritable handles, a caller's output pipe
+    # among them: harmless in a short-lived child, and daemon start clears
+    # them before it starts the long-lived daemon.
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    foreach ($k in $EnvVars.Keys) { $psi.EnvironmentVariables[$k] = [string]$EnvVars[$k] }
     try {
-        foreach ($k in $EnvVars.Keys) {
-            $saved[$k] = [Environment]::GetEnvironmentVariable($k)
-            [Environment]::SetEnvironmentVariable($k, [string]$EnvVars[$k])
-        }
         $p = [System.Diagnostics.Process]::Start($psi)
         if ($p) { $p.Dispose() }
-    } catch {
-    } finally {
-        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
-    }
+    } catch {}
 }
 
 function global:__sw_record([bool]$Ok, $Code) {

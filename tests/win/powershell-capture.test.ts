@@ -249,6 +249,12 @@ function describeShell(shell: string, terminal: Terminal): void {
       expect(sleep.session_id).toBe(echo.session_id);
       expect(sleep.duration_ms).toBeGreaterThanOrEqual(290);
       expect(sleep.duration_ms).toBeLessThan(10_000);
+
+      // The values went to the recorder's own environment only: nothing named
+      // SW_ADD_* exists in the shell, not even as an empty string.
+      drive(pid!, typeLine(`"swenv=[" + (([Environment]::GetEnvironmentVariables().Keys | Where-Object { $_ -like 'SW_ADD_*' }) -join ',') + "]"`));
+      const envRows = waitForScreen("env", (rows) => rows.some((r) => r.startsWith("swenv=")));
+      expect(envRows.filter((r) => r.startsWith("swenv="))).toEqual(["swenv=[]"]);
     }, TEST_TIMEOUT_MS);
 
     test("hands $? and $LASTEXITCODE on to the wrapped prompt, skips failed commands, stores each command once", () => {
