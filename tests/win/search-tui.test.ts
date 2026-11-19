@@ -19,17 +19,20 @@ const GIT_COMMANDS = ["git status", "git stash pop"];
 // Each test starts a console, a CLI and a driver; the driver polls for up to 10s.
 const TEST_TIMEOUT_MS = 30_000;
 
-// Runs `search --query git` as a child in its own console and records the
-// console's input/output modes before and after it. A bun wrapper rather than
-// run.cmd because cmd.exe resets the console modes after every command, which
-// would hide a leak. VT output processing is switched off first, since this
-// console starts with it on and leaving it on would otherwise go unnoticed.
-// The CLI gets no stdin: when stdin is the console, Bun itself restores the
-// input mode at exit, which would also hide a leak from the backend.
+// Runs a command (by default `search --query git`) as a child in its own
+// console and records the console's input/output modes before and after it,
+// then the child's exit code. A bun wrapper rather than run.cmd because
+// cmd.exe resets the console modes after every command, which would hide a
+// leak. VT output processing is switched off first, since this console starts
+// with it on and leaving it on would otherwise go unnoticed. The child gets no
+// stdin: when stdin is the console, Bun itself restores the input mode at
+// exit, which would also hide a leak from the backend. The wrapper ignores
+// Ctrl+Break so it outlives a test that sends one.
 const MODES_WRAPPER = `
 import { dlopen } from "bun:ffi";
 import { openSync, writeFileSync } from "fs";
-const [entry, out, err, modesOut] = process.argv.slice(2);
+const [out, err, modesOut, ...command] = process.argv.slice(2);
+process.on("SIGBREAK", () => {});
 const k = dlopen("kernel32.dll", {
   CreateFileW: { args: ["ptr", "u32", "u32", "ptr", "u32", "u32", "u64"], returns: "u64" },
   GetConsoleMode: { args: ["u64", "ptr"], returns: "i32" },
@@ -42,12 +45,23 @@ const m = new Uint32Array(1);
 const mode = (h) => (k.GetConsoleMode(h, m), m[0]);
 k.SetConsoleMode(hOut, mode(hOut) & ~0x4);
 const before = mode(hIn).toString(16) + " " + mode(hOut).toString(16);
-Bun.spawnSync([process.execPath, entry, "search", "--query", "git"], {
+const child = Bun.spawnSync(command, {
   stdin: "ignore",
   stdout: openSync(out, "w"),
   stderr: openSync(err, "w"),
 });
-writeFileSync(modesOut, before + "\\n" + mode(hIn).toString(16) + " " + mode(hOut).toString(16));
+const after = mode(hIn).toString(16) + " " + mode(hOut).toString(16);
+writeFileSync(modesOut, [before, after, child.exitCode].join("\\n"));
+`;
+
+// Puts the console in raw mode through the real backend, then throws before
+// any cleanup runs: what an error raised outside search.ts's try/finally does.
+const THROW_AFTER_RAW = `
+import { enableRawMode } from ${JSON.stringify(join(REPO, "src", "tui", "input.ts"))};
+import { write } from ${JSON.stringify(join(REPO, "src", "tui", "renderer.ts"))};
+enableRawMode();
+write("drawing\\r\\n");
+throw new Error("render failed");
 `;
 
 describe.skipIf(process.platform !== "win32")("interactive search in a real Windows console", () => {
@@ -80,20 +94,34 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
   const file = (name: string) => join(dir, name);
   const read = (name: string) => readFileSync(file(name), "utf8");
 
-  /** Start `search --query git` in a hidden console, stdout/stderr to files. */
-  function startSearch(): number {
+  /**
+   * Start `search --query git` in a hidden console, stdout/stderr to files.
+   * `before` lines run first in the same console (e.g. `mode con:`).
+   */
+  function startSearch(before: string[] = []): number {
     const run = `@"${process.execPath}" "${ENTRY}" search --query git > "${file("selected.txt")}" 2> "${file("err.txt")}"`;
-    writeFileSync(file("run.cmd"), run + "\r\n");
+    writeFileSync(file("run.cmd"), [...before, run].join("\r\n") + "\r\n");
     pid = startHiddenConsole("cmd.exe", ["/c", file("run.cmd")], env);
     return pid;
   }
 
-  /** Same search, under MODES_WRAPPER; modes.txt gets "before\nafter". */
-  function startSearchRecordingModes(): number {
+  /** Run `bun <args>` (default: the search) under MODES_WRAPPER. */
+  function startRecordingModes(args: string[] = [ENTRY, "search", "--query", "git"]): number {
     writeFileSync(file("wrapper.ts"), MODES_WRAPPER);
-    const args = [file("wrapper.ts"), ENTRY, file("selected.txt"), file("err.txt"), file("modes.txt")];
-    pid = startHiddenConsole(process.execPath, args, env);
+    const wrapperArgs = [file("wrapper.ts"), file("selected.txt"), file("err.txt"), file("modes.txt")];
+    pid = startHiddenConsole(process.execPath, [...wrapperArgs, process.execPath, ...args], env);
     return pid;
+  }
+
+  function recordedModes(): { before: string; after: string; exitCode: string } {
+    const [before, after, exitCode] = read("modes.txt").split("\n");
+    return { before, after, exitCode };
+  }
+
+  /** The console process is gone, so afterEach must not taskkill its pid. */
+  function expectExited(p: number): void {
+    expect(waitForExit(p)).toBe(true);
+    pid = null;
   }
 
   /** drive(), but a failure also shows what the CLI printed to stderr. */
@@ -115,8 +143,10 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
   const selectedCommand = (lines: string[]) =>
     lines.find((l) => l.startsWith("> ") && GIT_COMMANDS.some((c) => l.includes(c)))?.slice(2).split(/\s{2,}/)[0];
 
-  test("lists matching history and prints the row chosen with Down + Enter", () => {
-    const p = startSearch();
+  // 80 columns: the driver reads a console narrower than its 120-column cap.
+  // 120 columns: the frame follows the real width, not the 80-column fallback.
+  test.each([80, 120])("lists matching history and prints the row chosen with Down + Enter at %p columns", (cols) => {
+    const p = startSearch([`@mode con: cols=${cols} lines=30`]);
     const screens = driveSearch(p, [
       { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
       { type: "screen", label: "open" },
@@ -125,14 +155,15 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
       { type: "screen", label: "moved" },
       { type: "key", value: "enter" },
     ]);
-    expect(waitForExit(p)).toBe(true);
+    expectExited(p);
 
     const open = screen(screens, "open");
     expect(open.some((l) => l.includes("git status"))).toBe(true);
     expect(open.some((l) => l.includes("git stash pop"))).toBe(true);
     expect(open.some((l) => l.includes("docker ps"))).toBe(false);
-    // Box-drawing glyphs arrive intact: UTF-8 output is decoded as Unicode.
-    expect(open.filter((l) => /^─+$/.test(l)).length).toBe(2);
+    // Box-drawing glyphs arrive intact (UTF-8 output is decoded as Unicode),
+    // and both separators span exactly the console's width.
+    expect(open.filter((l) => /^─+$/.test(l))).toEqual(["─".repeat(cols), "─".repeat(cols)]);
 
     const first = selectedCommand(open);
     const moved = selectedCommand(screen(screens, "moved"));
@@ -150,23 +181,53 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
       { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
       { type: "key", value: "escape" },
     ]);
-    expect(waitForExit(p)).toBe(true);
+    expectExited(p);
 
     expect(read("selected.txt")).toBe("");
     expect(read("err.txt")).toBe("");
   }, TEST_TIMEOUT_MS);
 
   test.each(["enter", "escape", "ctrl-c"] as KeyName[])("leaves the console modes as it found them after %s", (key) => {
-    const p = startSearchRecordingModes();
+    const p = startRecordingModes();
     driveSearch(p, [
       { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
       { type: "key", value: key },
     ]);
-    expect(waitForExit(p)).toBe(true);
+    expectExited(p);
 
-    const [before, after] = read("modes.txt").split("\n");
+    const { before, after, exitCode } = recordedModes();
     expect(before).toMatch(/^[0-9a-f]+ [0-9a-f]+$/);
     expect(after).toBe(before);
+    expect(exitCode).toBe("0");
     expect(read("err.txt")).toBe("");
+  }, TEST_TIMEOUT_MS);
+
+  test("survives Ctrl+Break and still leaves the console modes as it found them", () => {
+    const p = startRecordingModes();
+    driveSearch(p, [
+      { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
+      { type: "key", value: "ctrl-break" },
+      // Still reading keys: the query becomes "gitx", which matches nothing.
+      { type: "text", value: "x" },
+      { type: "waitFor", text: "No matches found" },
+      { type: "key", value: "escape" },
+    ]);
+    expectExited(p);
+
+    const { before, after, exitCode } = recordedModes();
+    expect(after).toBe(before);
+    expect(exitCode).toBe("0");
+    expect(read("err.txt")).toBe("");
+  }, TEST_TIMEOUT_MS);
+
+  test("restores the console modes when an error skips the caller's cleanup", () => {
+    writeFileSync(file("throw.ts"), THROW_AFTER_RAW);
+    const p = startRecordingModes([file("throw.ts")]);
+    expectExited(p);
+
+    const { before, after, exitCode } = recordedModes();
+    expect(read("err.txt")).toContain("render failed");
+    expect(exitCode).toBe("1");
+    expect(after).toBe(before);
   }, TEST_TIMEOUT_MS);
 });

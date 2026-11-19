@@ -70,6 +70,23 @@ function closeFd(fd: number | null): void {
 
 export function createWindowsTty(): Tty {
   let con: Console | null = null;
+  let exitHooked = false;
+
+  function close(): void {
+    if (con === null) return;
+    const c = con;
+    con = null;
+    try {
+      if (c.origIn !== null) k.SetConsoleMode(c.hIn, c.origIn);
+    } catch {}
+    try {
+      if (c.origOut !== null) k.SetConsoleMode(c.hOut, c.origOut);
+    } catch {}
+    closeFd(c.inFd);
+    closeFd(c.outFd);
+    closeHandle(c.hIn);
+    closeHandle(c.hOut);
+  }
 
   function open(): Console {
     if (con !== null) return con;
@@ -97,6 +114,22 @@ export function createWindowsTty(): Tty {
       k.SetConsoleMode(hOut, opened.origOut | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT);
     }
     con = opened;
+
+    // Safety net for exits that skip the caller's cleanup, such as an error
+    // thrown before its try/finally. The console outlives this process, and
+    // PowerShell does not reset modes it did not set. close() is idempotent,
+    // so a normal exit that already closed is unaffected.
+    if (!exitHooked) {
+      exitHooked = true;
+      process.on("exit", close);
+      // Ctrl+Break is still a signal in raw input mode, and Bun's default is
+      // to exit at once without running exit hooks, leaving the modes
+      // changed. Registering any listener stops that default. A listener that
+      // cleaned up would not run while the read loop blocks, so this one does
+      // nothing: the TUI stays open, to be left via Escape, Ctrl+C or Enter,
+      // which clean up properly.
+      process.on("SIGBREAK", () => {});
+    }
     return con;
   }
 
@@ -141,20 +174,6 @@ export function createWindowsTty(): Tty {
       return { rows: 24, cols: 80 };
     },
 
-    close(): void {
-      if (con === null) return;
-      const c = con;
-      con = null;
-      try {
-        if (c.origIn !== null) k.SetConsoleMode(c.hIn, c.origIn);
-      } catch {}
-      try {
-        if (c.origOut !== null) k.SetConsoleMode(c.hOut, c.origOut);
-      } catch {}
-      closeFd(c.inFd);
-      closeFd(c.outFd);
-      closeHandle(c.hIn);
-      closeHandle(c.hOut);
-    },
+    close,
   };
 }
