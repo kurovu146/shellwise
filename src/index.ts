@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-import { existsSync } from "fs";
 import { runAdd } from "./cli/add";
 import { runSearch, pickCommand } from "./cli/search";
 import { runSuggest } from "./cli/suggest";
@@ -13,8 +12,7 @@ import { deleteCommand } from "./db/queries";
 import { closeDb } from "./db/connection";
 import { checkForUpdate } from "./utils/update-check";
 import { startServer, isDaemonRunning, isDaemonLive, getDaemonInfo } from "./daemon/server";
-import { daemonRequest } from "./daemon/client";
-import { getSocketPath } from "./daemon/protocol";
+import { daemonRequest, probeDaemon } from "./daemon/client";
 import { selfCommand } from "./utils/self";
 import { getDataDir } from "./utils/paths";
 import { resolve as resolvePath } from "path";
@@ -212,11 +210,13 @@ async function main(): Promise<void> {
               detached: true,
             });
             proc.unref();
-            // Poll until the daemon is reachable (up to 3s): a cold start on
-            // Windows is slower than a fixed 200ms guess.
+            // Poll until a daemon answers (up to 3s): a cold start on Windows
+            // is slower than a fixed 200ms guess. It may be another start's:
+            // of daemons started at once only one keeps running. A socket
+            // file alone proves nothing, it may be a dead daemon's.
             const deadline = Date.now() + 3000;
             while (Date.now() < deadline) {
-              if (isDaemonRunning() && existsSync(getSocketPath())) break;
+              if (isDaemonRunning() && (await probeDaemon()) !== "unreachable") break;
               await new Promise((r) => setTimeout(r, 50));
             }
             if (isDaemonRunning()) {
@@ -230,7 +230,7 @@ async function main(): Promise<void> {
           }
           case "_run":
             // Internal: actual daemon process
-            startServer();
+            await startServer();
             break;
           case "stop": {
             if (!(await isDaemonLive())) {

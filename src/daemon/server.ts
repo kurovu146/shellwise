@@ -5,7 +5,7 @@ import { getCommonSuggestions } from "../data/common-commands";
 import { checkForUpdate, getUpdateNotice } from "../utils/update-check";
 import { parseRequest, getSocketPath, getPidPath, formatSuggestResponse } from "./protocol";
 import { FRECENCY_EXPR } from "../db/frecency";
-import { unlinkSync, writeFileSync, existsSync, chmodSync } from "fs";
+import { unlinkSync, writeFileSync, existsSync, chmodSync, readFileSync, statSync } from "fs";
 import { probeDaemon } from "./client";
 import type { Socket } from "bun";
 
@@ -146,20 +146,62 @@ export function handleRequest(raw: string): string {
   }
 }
 
-export function startServer(): void {
+/**
+ * Takes the pid file as the endpoint's lock: created exclusively, so of
+ * daemons starting at once (two shells opening together) exactly one gets it.
+ * False when a live daemon holds it. A stale one (dead pid, or a live pid that
+ * never answered) is removed and the create retried once.
+ */
+async function takePidFile(pidPath: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(pidPath, `${process.pid}`, { flag: "wx", mode: 0o600 });
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const owner = await endpointOwner();
+    if (owner.live) return false;
+    if (owner.content !== null) removePidFileIf(owner.content);
+  }
+  return false;
+}
+
+export async function startServer(): Promise<void> {
   const socketPath = getSocketPath();
   const pidPath = getPidPath();
 
-  // Cleanup stale socket
-  if (existsSync(socketPath)) {
-    try {
-      unlinkSync(socketPath);
-    } catch {}
+  // Only the lock holder touches the socket path: unlinking it would cut off
+  // a daemon that is already serving there.
+  if (!(await takePidFile(pidPath))) process.exit(0);
+
+  try {
+    // A leftover socket file of a daemon that died.
+    if (existsSync(socketPath)) {
+      try {
+        unlinkSync(socketPath);
+      } catch {}
+    }
+    initPreparedStatements();
+    listen(socketPath);
+  } catch (e) {
+    // Give the lock back, or every later start would wait for this one.
+    removePidFileIf(`${process.pid}`);
+    throw e;
   }
 
-  // Init DB + prepared statements
-  initPreparedStatements();
+  resetIdleTimer();
 
+  // Cleanup on exit
+  const cleanup = () => {
+    stopServer();
+    process.exit(0);
+  };
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
+}
+
+function listen(socketPath: string): void {
   const socketHandlers = {
     open(socket: Socket) {
       // Per-connection accumulator: TCP/stream sockets don't preserve message
@@ -194,28 +236,68 @@ export function startServer(): void {
   try {
     chmodSync(socketPath, 0o600);
   } catch {}
-
-  // Save PID (owner-only)
-  writeFileSync(pidPath, `${process.pid}`, { mode: 0o600 });
-
-  resetIdleTimer();
-
-  // Cleanup on exit
-  const cleanup = () => {
-    stopServer();
-    process.exit(0);
-  };
-  process.on("SIGTERM", cleanup);
-  process.on("SIGINT", cleanup);
 }
 
-function ownsPidFile(): boolean {
+// A daemon writes its pid file before it binds the socket, so for a moment
+// its pid is alive and nothing answers yet. For this long after the file was
+// written, that is a daemon still starting, not a stale file.
+const START_GRACE_MS = 3000;
+
+function readPidFile(): string | null {
   try {
-    const content = require("fs").readFileSync(getPidPath(), "utf-8").trim();
-    return parseInt(content.split("\n")[0]) === process.pid;
+    return readFileSync(getPidPath(), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function pidOf(content: string): number {
+  return parseInt(content.trim().split("\n")[0]);
+}
+
+function pidAlive(pid: number): boolean {
+  // 0 and negative pids address process groups in process.kill.
+  if (!(pid > 0)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }
+}
+
+/** Removes the pid file only if it still holds `content`, never a successor's. */
+function removePidFileIf(content: string): void {
+  if (readPidFile() !== content) return;
+  try {
+    unlinkSync(getPidPath());
+  } catch {}
+}
+
+/**
+ * Who holds the endpoint. Live: the pid file's pid is alive and somebody is
+ * listening on the socket (answering, or connected but busy). A live pid that
+ * does not answer yet is waited for while its pid file is younger than
+ * START_GRACE_MS. Otherwise not live, with the pid file content judged stale
+ * (null when there is no pid file).
+ */
+async function endpointOwner(): Promise<{ live: true } | { live: false; content: string | null }> {
+  while (true) {
+    const content = readPidFile();
+    if (content === null || !pidAlive(pidOf(content))) return { live: false, content };
+    if ((await probeDaemon()) !== "unreachable") return { live: true };
+    let age = Infinity;
+    try {
+      age = Date.now() - statSync(getPidPath()).mtimeMs;
+    } catch {}
+    if (age >= START_GRACE_MS) return { live: false, content };
+    await Bun.sleep(50);
+  }
+}
+
+function ownsPidFile(): boolean {
+  const content = readPidFile();
+  return content !== null && pidOf(content) === process.pid;
 }
 
 export function stopServer(): void {
@@ -243,39 +325,28 @@ export function stopServer(): void {
 }
 
 export function isDaemonRunning(): boolean {
-  const pidPath = getPidPath();
-  if (!existsSync(pidPath)) return false;
-
-  try {
-    const content = require("fs").readFileSync(pidPath, "utf-8").trim();
-    const pid = parseInt(content.split("\n")[0]);
-    process.kill(pid, 0); // Check if process exists
-    return true;
-  } catch {
-    // Stale PID file
-    try {
-      unlinkSync(pidPath);
-    } catch {}
-    return false;
-  }
+  const content = readPidFile();
+  if (content === null) return false;
+  if (pidAlive(pidOf(content))) return true;
+  // Stale PID file
+  removePidFileIf(content);
+  return false;
 }
 
 /**
  * "Running" for the CLI's decisions: the pid is alive AND somebody is
  * listening on the socket. A pid file alone proves little on Windows, where
  * %TEMP% survives reboots and pids are recycled. Stale means nobody listens
- * (no socket file, or the connect fails): both endpoint files are then removed
- * so a fresh daemon can take over. A daemon that accepts the connection but is
- * too busy to answer in time is alive and is left untouched.
+ * (no socket file, or the connect fails) past a starting daemon's grace: the
+ * stale pid file is then removed so a fresh daemon can take over. A leftover
+ * socket file is left to that daemon, which removes it once it holds the pid
+ * file: removed from here, it could be the new daemon's. A daemon that accepts
+ * the connection but is too busy to answer in time is alive and left alone.
  */
 export async function isDaemonLive(): Promise<boolean> {
-  if (!isDaemonRunning()) return false;
-  if ((await probeDaemon()) !== "unreachable") return true;
-  for (const path of [getPidPath(), getSocketPath()]) {
-    try {
-      unlinkSync(path);
-    } catch {}
-  }
+  const owner = await endpointOwner();
+  if (owner.live) return true;
+  if (owner.content !== null) removePidFileIf(owner.content);
   return false;
 }
 

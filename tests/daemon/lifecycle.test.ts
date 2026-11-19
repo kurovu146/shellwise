@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, renameSync, rmdirSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, renameSync, rmdirSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { connect, createServer } from "net";
@@ -64,6 +64,16 @@ function rawRequest(socketPath: string, message: string): Promise<string> {
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "sw-"));
 });
+
+/**
+ * A pid file left behind: written an hour ago. A fresh one whose pid is alive
+ * is a daemon still starting, and is waited for (START_GRACE_MS).
+ */
+function writeLeftoverPidFile(path: string, pid: number): void {
+  writeFileSync(path, String(pid));
+  const anHourAgo = new Date(Date.now() - 3600_000);
+  utimesSync(path, anHourAgo, anHourAgo);
+}
 
 function isAlive(pid: number): boolean {
   try {
@@ -239,13 +249,13 @@ describe("stale pid file", () => {
     const env = envFor("stale");
     const pidFile = join(dir, "stale.pid");
     // This test process is alive but is not a daemon, and nothing listens.
-    writeFileSync(pidFile, String(process.pid));
+    writeLeftoverPidFile(pidFile, process.pid);
 
     const status = await sw(env, "daemon", "status");
     expect(status.out).toContain("Daemon not running");
     expect(existsSync(pidFile)).toBe(false);
 
-    writeFileSync(pidFile, String(process.pid));
+    writeLeftoverPidFile(pidFile, process.pid);
     const start = await sw(env, "daemon", "start");
     expect(start.code).toBe(0);
     expect(start.out).toContain("Daemon started");
@@ -349,12 +359,98 @@ describe("endpoint ownership on exit", () => {
   }, 20000);
 });
 
+/**
+ * Pids of every `daemon _run` of this checkout's entry point, from the process
+ * table (Win32_Process on Windows, ps elsewhere): a daemon that lost its
+ * socket and pid file to another one is still listed here.
+ */
+function daemonPids(): number[] {
+  const marker = `${ENTRY} daemon _run`.toLowerCase();
+  if (process.platform === "win32") {
+    const query = `Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`;
+    const out = Bun.spawnSync(["powershell.exe", "-NoProfile", "-Command", query]).stdout.toString();
+    return out
+      .split(/\r?\n/)
+      .filter((l) => l.toLowerCase().includes(marker))
+      .map((l) => parseInt(l));
+  }
+  const out = Bun.spawnSync(["ps", "-axo", "pid=,args="]).stdout.toString();
+  return out
+    .split("\n")
+    .filter((l) => l.toLowerCase().includes(marker))
+    .map((l) => parseInt(l.trim()));
+}
+
+describe("concurrent starts", () => {
+  test("six `daemon start` at once leave exactly one daemon, round after round", async () => {
+    // Daemons of this entry that exist already (a developer's own) are not ours.
+    const foreign = new Set(daemonPids());
+    const ours = () => daemonPids().filter((p) => !foreign.has(p));
+    for (let round = 0; round < 10; round++) {
+      const env = envFor(`race${round}`);
+      const pidFile = join(dir, `race${round}.pid`);
+      try {
+        const starts = Array.from({ length: 6 }, () =>
+          Bun.spawn([process.execPath, ENTRY, "daemon", "start"], { env, cwd: REPO, stdout: "pipe", stderr: "pipe", timeout: 20000 })
+        );
+        const results = await Promise.all(
+          starts.map(async (p) => {
+            const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+            return { code, out: out.trim(), err: err.trim() };
+          })
+        );
+        // Each start succeeds: it started the daemon, or found the winner's.
+        for (const r of results) {
+          expect(r).toMatchObject({ code: 0, err: "" });
+          expect(r.out).toMatch(/^Daemon (started \(pid: \d+\)|already running\.)$/);
+        }
+        // The starts that lost exit once the winner answers: allow them a moment.
+        const deadline = Date.now() + 5000;
+        while (ours().length > 1 && Date.now() < deadline) await Bun.sleep(200);
+        const alive = ours();
+        expect({ round, alive }).toEqual({ round, alive: [parseInt(readFileSync(pidFile, "utf-8"))] });
+        expect(await rawRequest(env.SHELLWISE_DAEMON_SOCKET, "PING\n")).toContain("PONG");
+
+        expect((await sw(env, "daemon", "stop")).out).toContain("Daemon stopped");
+        expect(await waitGone(alive[0])).toBe(true);
+        expect(ours()).toEqual([]);
+      } finally {
+        // Never leave a daemon of a failed round running.
+        for (const pid of ours()) await killDaemon(pid);
+      }
+    }
+  }, 240_000);
+});
+
+describe("a daemon still starting", () => {
+  test("a fresh pid file of a live pid that never answers is waited for, then taken over", async () => {
+    const env = envFor("young");
+    const pidFile = join(dir, "young.pid");
+    // Fresh, alive, nothing listening: a daemon between taking its pid file
+    // and binding the socket looks the same, for at most the grace.
+    writeFileSync(pidFile, String(process.pid));
+    let pid = 0;
+    try {
+      const t0 = Date.now();
+      const start = await sw(env, "daemon", "start");
+      expect(start.code).toBe(0);
+      expect(start.out).toContain("Daemon started");
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(2500);
+      pid = parseInt(readFileSync(pidFile, "utf-8"));
+      expect(pid).not.toBe(process.pid);
+      expect(await rawRequest(env.SHELLWISE_DAEMON_SOCKET, "PING\n")).toContain("PONG");
+    } finally {
+      await killDaemon(pid);
+    }
+  }, 20000);
+});
+
 describe("unreachable socket", () => {
   test("a live pid plus a leftover socket file nobody listens on is stale; start recovers", async () => {
     const env = envFor("dead");
     const sock = env.SHELLWISE_DAEMON_SOCKET;
     const pidFile = join(dir, "dead.pid");
-    writeFileSync(pidFile, String(process.pid));
+    writeLeftoverPidFile(pidFile, process.pid);
     writeFileSync(sock, ""); // a file, not a listener: connect fails
     const saved = process.env.SHELLWISE_DAEMON_SOCKET;
     process.env.SHELLWISE_DAEMON_SOCKET = sock;
