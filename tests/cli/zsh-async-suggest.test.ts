@@ -69,7 +69,7 @@ function startShell(delayMs: number): { requests(): string[] } {
   killSession();
   Bun.spawnSync([
     "tmux", "new-session", "-d", "-s", SESSION, "-x", "110", "-y", "20",
-    `env ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} zsh -i`,
+    `env skip_global_compinit=1 ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} zsh -i`,
   ]);
   Bun.sleepSync(1500);
 

@@ -151,7 +151,13 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
     function expectRecorded(query: string, command: string): void {
       const deadline = Date.now() + 10_000;
       while (!suggest(query).includes(command)) {
-        if (Date.now() > deadline) throw new Error(`never recorded: ${command}\nfound: ${suggest(query).join(" | ")}`);
+        if (Date.now() > deadline) {
+          const rows = pid === null ? [] : drive(pid, [{ type: "screen", label: "never recorded" }])[0].rows;
+          const daemon = `${box.cli(["daemon", "status"]).trim()} (pids ${daemonPids().join(",")})`;
+          throw new Error(
+            `never recorded: ${command}\nfound: ${suggest(query).join(" | ")}\ndaemon: ${daemon}\nscreen:\n${rows.join("\n").trimEnd()}`
+          );
+        }
         Bun.sleepSync(100);
       }
     }

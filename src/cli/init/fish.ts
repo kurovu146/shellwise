@@ -37,11 +37,12 @@ end
 
 if command -q nc
     set -g __sw_transport nc
-    # netcat-openbsd (Debian, Ubuntu) stays connected after its input ends
-    # unless given -N, and the daemon keeps a connection open: every query
-    # would hang. BSD and macOS nc have no -N and leave on their own.
+    # The netcat-openbsd of Debian, Ubuntu and Arch stays connected after its
+    # input ends unless given -N, and the daemon keeps a connection open:
+    # every query would hang. macOS nc leaves on its own, and sends nothing
+    # when given -N.
     set -g __sw_nc_flags -U
-    if command nc -h 2>&1 | string match -rq -- '^\\s*-N\\s'
+    if command nc -h 2>&1 | string match -q -- '*OpenBSD netcat (Debian*'
         set -g __sw_nc_flags -N -U
     end
 else if command -q socat
