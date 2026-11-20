@@ -218,6 +218,35 @@ describe.skipIf(process.platform !== "win32")("interactive search in a real Wind
     expect(read("err.txt")).toBe("");
   }, TEST_TIMEOUT_MS);
 
+  // At 50 columns the status bar is wider than the console: with auto-wrap on
+  // it took two rows, and every repaint started one row lower.
+  test("redraws in place at 50 columns, where the status bar is wider than the console", () => {
+    const markers = Array.from({ length: 10 }, (_, i) => `marker ${i + 1}`);
+    const p = startSearch(["@mode con: cols=50 lines=30", ...markers.map((m) => `@echo ${m}`)], ["@pause >nul"]);
+    const redraws = ["open", "typed 1", "typed 2", "typed 3"];
+    const screens = driveSearch(p, [
+      { type: "waitFor", text: "git stash pop", timeoutMs: 10_000 },
+      { type: "screen", label: "open" },
+      ...["s", "t", "a"].flatMap((c, i): Step[] => [
+        { type: "text", value: c },
+        { type: "waitForChange" },
+        { type: "screen", label: `typed ${i + 1}` },
+      ]),
+      { type: "key", value: "escape" },
+      { type: "waitForChange" },
+      { type: "screen", label: "after" },
+    ]);
+    const rows = (label: string) => screens.find((s) => s.label === label)!.rows;
+
+    // The search box stays on the row under the output, keypress after keypress.
+    expect(redraws.map((label) => rows(label).findIndex((row) => /^> git(s|st|sta)?$/.test(row)))).toEqual([10, 10, 10, 10]);
+    for (const label of redraws) expect(rows(label).slice(0, 10)).toEqual(markers);
+    // Escape wipes the frame and leaves no stale rows below the output.
+    expect(rows("after").slice(0, 10)).toEqual(markers);
+    expect(rows("after").slice(10).filter((row) => row !== "")).toEqual([]);
+    expect(read("err.txt")).toBe("");
+  }, TEST_TIMEOUT_MS);
+
   test("Escape cancels without printing anything", () => {
     const p = startSearch();
     driveSearch(p, [

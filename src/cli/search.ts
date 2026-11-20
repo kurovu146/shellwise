@@ -16,6 +16,10 @@ import { renderResultList } from "../tui/components/result-list";
 import { renderStatusBar } from "../tui/components/status-bar";
 import { writeSync } from "fs";
 
+// DECAWM: whether a character written in the last column wraps to the next row.
+const AUTOWRAP_OFF = "\x1b[?7l";
+const AUTOWRAP_ON = "\x1b[?7h";
+
 interface SearchState {
   query: string;
   cursorPos: number;
@@ -50,6 +54,8 @@ export function pickCommand(initialQuery: string = ""): string | null {
     // up first would erase scrollback content above the frame.
     write(moveCursorToColumn(1));
     write(clearDown());
+    // Wrap back on, should an interruption have cut a paint short.
+    write(AUTOWRAP_ON);
     write(showCursor());
     disableRawMode();
     closeTtyInput();
@@ -266,8 +272,12 @@ function render(state: SearchState): void {
   lines.push(clearLine() + renderStatusBar(state.results.length, cols));
 
   // Write all lines, then wipe anything stale below the frame (e.g. leftovers
-  // from a previous, taller frame after a terminal resize)
-  write(lines.join("\r\n") + "\r\n");
+  // from a previous, taller frame after a terminal resize). Auto-wrap is off
+  // while the lines go out, in the same write: a line wider than the terminal
+  // (the status bar below about 55 columns, double-width text) would take a
+  // second row, and the cursor-up below would then land one row low on every
+  // paint.
+  write(AUTOWRAP_OFF + lines.join("\r\n") + "\r\n" + AUTOWRAP_ON);
   write(clearDown());
 
   // Track rendered lines for next clear
