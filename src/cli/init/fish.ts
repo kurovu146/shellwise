@@ -37,6 +37,13 @@ end
 
 if command -q nc
     set -g __sw_transport nc
+    # netcat-openbsd (Debian, Ubuntu) stays connected after its input ends
+    # unless given -N, and the daemon keeps a connection open: every query
+    # would hang. BSD and macOS nc have no -N and leave on their own.
+    set -g __sw_nc_flags -U
+    if command nc -h 2>&1 | string match -rq -- '^\\s*-N\\s'
+        set -g __sw_nc_flags -N -U
+    end
 else if command -q socat
     set -g __sw_transport socat
 else
@@ -48,7 +55,7 @@ end
 function __sw_send --argument-names msg
     switch \$__sw_transport
         case nc
-            printf '%s\\n' \$msg | command nc -U \$__sw_sock 2>/dev/null
+            printf '%s\\n' \$msg | command nc \$__sw_nc_flags \$__sw_sock 2>/dev/null
         case socat
             printf '%s\\n' \$msg | command socat - UNIX-CONNECT:\$__sw_sock 2>/dev/null
         case '*'
