@@ -161,22 +161,6 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
             "powershell", "-NoProfile", "-Command",
             "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'bun|cmd' } | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
           ]).stdout.toString().trim();
-          // Does a later command get stored, and what did the shell see?
-          const dbg = '"dbg ok=$($global:__sw.LastOk) last=$($global:__sw.LastId) hid=$((Get-History -Count 1).Id) bin=$($global:__sw.BinPath)"';
-          const later =
-            pid === null
-              ? []
-              : drive(pid, [
-                  ...typeLine("echo fallback-two"),
-                  { type: "wait", ms: 2000 },
-                  ...typeLine(dbg),
-                  { type: "wait", ms: 1000 },
-                  { type: "screen", label: "later" },
-                ]).at(-1)!.rows;
-          const db2 = new Database(join(box.env.XDG_DATA_HOME, "shellwise", "history.db"), { readonly: true });
-          const stored2 = JSON.stringify(db2.query("SELECT command, exit_code FROM commands ORDER BY id DESC LIMIT 3").all());
-          db2.close();
-          console.log(`later stored: ${stored2}\nlater screen:\n${later.join("\n").trimEnd()}`);
           throw new Error(
             `never recorded: ${command}\nfound: ${suggest(query).join(" | ")}\ndaemon: ${daemon}\nstored: ${stored}\nprocesses:\n${procs}\nscreen:\n${rows.join("\n").trimEnd()}`
           );
