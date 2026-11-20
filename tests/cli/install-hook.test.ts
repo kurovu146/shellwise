@@ -134,6 +134,42 @@ describe("addToProfile", () => {
     expect(addToProfile(commented, "shellwise")).toBe("added");
   });
 
+  test("a hand-written init line counts with .exe, a path, quotes, other letter case and extra spaces", () => {
+    const tail = " | Out-String | Invoke-Expression\r\n";
+    const lines = [
+      "shellwise.exe init powershell",
+      "shellwise.cmd init powershell",
+      String.raw`C:\tools\shellwise.exe init powershell`,
+      String.raw`& "C:\tools\shellwise.exe" init powershell`,
+      String.raw`& "C:\Program Files\shellwise\shellwise.exe" init powershell`,
+      String.raw`& "C:\tools\shellwise" init powershell`,
+      String.raw`& 'C:\tools\sw.exe' init powershell`,
+      "Shellwise Init PowerShell",
+      "shellwise  init   powershell",
+    ];
+    lines.forEach((line, i) => {
+      const p = profileWith(`Import-Module posh-git\r\n${line}${tail}`, `variant-${i}.ps1`);
+      const before = bytes(p);
+      expect({ line, result: addToProfile(p, "shellwise") }).toEqual({ line, result: "present" });
+      expect(bytes(p).equals(before)).toBe(true);
+    });
+  });
+
+  test("not an init line: commented out, another program, or a longer name", () => {
+    const tail = " | Out-String | Invoke-Expression\r\n";
+    const lines = [
+      String.raw`# & "C:\tools\shellwise.exe" init powershell`,
+      "myshellwise init powershell",
+      "foo-sw init powershell",
+      "zoxide init powershell",
+      "shellwise-dev init powershell",
+    ];
+    lines.forEach((line, i) => {
+      const p = profileWith(`${line}${tail}`, `other-${i}.ps1`);
+      expect({ line, result: addToProfile(p, "shellwise") }).toEqual({ line, result: "added" });
+    });
+  });
+
   test("finds the block in the middle of other content, in UTF-16LE too", () => {
     const text = `a\r\n${BLOCK_CRLF}b\r\n`;
     const p = profileWith(Buffer.concat([UTF16LE_BOM, Buffer.from(text, "utf16le")]));
@@ -197,6 +233,10 @@ describe("removeFromProfile", () => {
     const sw = profileWith(`a\r\n${MARKER}\r\nsw init powershell | Out-String | Invoke-Expression\r\n`, "sw.ps1");
     expect(removeFromProfile(sw)).toBe(true);
     expect(bytes(sw).toString("latin1")).toBe("a\r\n");
+
+    const path = profileWith(`a\r\n${MARKER}\r\n& "C:\\tools\\shellwise.exe" init powershell | Out-String | Invoke-Expression\r\n`, "path.ps1");
+    expect(removeFromProfile(path)).toBe(true);
+    expect(bytes(path).toString("latin1")).toBe("a\r\n");
   });
 
   test("deletes a profile that holds nothing but the block", () => {

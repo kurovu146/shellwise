@@ -54,10 +54,17 @@ const UTF8_BOM = "\xEF\xBB\xBF";
 const splitLines = (text: string) => text.split(/(?<=\n)/).filter((l) => l !== "");
 const stripBom = (text: string) => (text.startsWith(UTF8_BOM) ? text.slice(UTF8_BOM.length) : text);
 const isMarker = (line: string) => stripBom(line).trim() === MARKER;
+// shellwise or sw, as typed or as a file (.exe, .cmd), with an optional path:
+// bare, or in quotes where it may contain spaces (`& "C:\...\shellwise.exe"`).
+const INIT_NAME = String.raw`(?:shellwise|sw)(?:\.exe|\.cmd)?`;
+const INIT_PROGRAM = String.raw`(?:"(?:[^"]*[\\/])?${INIT_NAME}"|'(?:[^']*[\\/])?${INIT_NAME}'|(?:[^\s"'|;&(){}]*[\\/])?${INIT_NAME})`;
+// Not part of a longer name (myshellwise, foo-sw, x.sw); any letter case and
+// spacing, as PowerShell accepts them.
+const INIT_RE = new RegExp(String.raw`(?:^|[^\w.-])${INIT_PROGRAM}\s+init\s+powershell\b`, "i");
 /** A line running shellwise's (or sw's) PowerShell init, ours or hand-written; not a comment. */
 const isInitLine = (line: string) => {
   const code = stripBom(line).trim();
-  return !code.startsWith("#") && /(^|[^\w.-])(shellwise|sw) init powershell\b/.test(code);
+  return !code.startsWith("#") && INIT_RE.test(code);
 };
 
 /**
