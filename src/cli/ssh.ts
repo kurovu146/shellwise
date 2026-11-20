@@ -111,9 +111,16 @@ export function buildSshArgs(opts: SshArgsOptions): string[] {
 export interface RunSshOptions {
   /** Let the remote host write into local history. Off by default. */
   allowWrite?: boolean;
+  /** The platform to act for; tests set it. */
+  platform?: NodeJS.Platform;
 }
 
 export async function runSsh(userArgs: string[], opts: RunSshOptions = {}): Promise<number> {
+  // The forwarded socket and the proxy are POSIX-only so far.
+  if ((opts.platform ?? process.platform) === "win32") {
+    console.error("shellwise ssh is not supported on Windows yet.");
+    return 1;
+  }
   if (userArgs.length === 0) {
     console.error(`Usage: shellwise ssh [--save-history] [ssh options] <host>
 

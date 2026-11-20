@@ -1,5 +1,67 @@
-import { describe, test, expect } from "bun:test";
-import { buildRemoteZshrc, buildRemoteCommand, buildSshArgs } from "../../src/cli/ssh";
+import { describe, test, expect, spyOn } from "bun:test";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { buildRemoteZshrc, buildRemoteCommand, buildSshArgs, runSsh } from "../../src/cli/ssh";
+import { removeDir } from "../win/console-harness";
+
+const ENTRY = join(import.meta.dir, "..", "..", "src", "index.ts");
+const WINDOWS_MESSAGE = "shellwise ssh is not supported on Windows yet.";
+
+describe("ssh on Windows", () => {
+  test("refuses with one line on stderr before anything else, even the usage", async () => {
+    // Should it get further, it must find no daemon at an endpoint of its own,
+    // never the default one.
+    const dir = mkdtempSync(join(tmpdir(), "sw-ssh-unit-"));
+    const saved = process.env.SHELLWISE_DAEMON_SOCKET;
+    process.env.SHELLWISE_DAEMON_SOCKET = join(dir, "d.sock");
+    const errors: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...a: unknown[]) => void errors.push(a.join(" ")));
+    try {
+      expect(await runSsh(["vps.example.com"], { platform: "win32" })).toBe(1);
+      expect(await runSsh([], { platform: "win32" })).toBe(1);
+    } finally {
+      spy.mockRestore();
+      if (saved === undefined) delete process.env.SHELLWISE_DAEMON_SOCKET;
+      else process.env.SHELLWISE_DAEMON_SOCKET = saved;
+      removeDir(dir);
+    }
+    expect(errors).toEqual([WINDOWS_MESSAGE, WINDOWS_MESSAGE]);
+  });
+
+  test("elsewhere it goes on as before (here: the usage, with no host)", async () => {
+    const errors: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...a: unknown[]) => void errors.push(a.join(" ")));
+    try {
+      expect(await runSsh([], { platform: "linux" })).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toStartWith("Usage: shellwise ssh");
+  });
+
+  test.skipIf(process.platform !== "win32")("`sw ssh` exits 1 with that line and nothing else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sw-ssh-win-"));
+    try {
+      const p = Bun.spawnSync([process.execPath, ENTRY, "ssh", "vps.example.com"], {
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: join(dir, "data"),
+          XDG_CONFIG_HOME: join(dir, "config"),
+          SHELLWISE_DAEMON_SOCKET: join(dir, "d.sock"),
+        },
+      });
+      expect({ code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString().trim() }).toEqual({
+        code: 1,
+        out: "",
+        err: WINDOWS_MESSAGE,
+      });
+    } finally {
+      removeDir(dir);
+    }
+  });
+});
 
 describe("buildRemoteZshrc", () => {
   const zshrc = buildRemoteZshrc("# INTEGRATION MARKER");
