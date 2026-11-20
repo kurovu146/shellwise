@@ -324,8 +324,10 @@ On Windows the same files live under `%USERPROFILE%\.local\share\shellwise` and
 daemon's per-user socket file is in `%TEMP%`. It is protected by the permissions of your own
 `%TEMP%` folder, not by a file mode.
 
-In PowerShell, lines PSReadLine itself would not save to its history file (it treats them as
-sensitive: passwords, tokens, keys) are not recorded.
+In PowerShell, a line that PSReadLine's built-in rule keeps out of its own history file is not
+recorded either. That rule is a word match (`password`, `asplaintext`, `token`, `apikey`, `secret`;
+the PSReadLine 2.0 that ships with Windows PowerShell 5.1 matches any `key`), not secret detection:
+`gh auth token` is skipped, `$env:OPENAI_API_KEY = '…'` is not.
 
 ## ✅ Requirements
 
@@ -339,7 +341,8 @@ sensitive: passwords, tokens, keys) are not recorded.
 ## ⬆️ Update
 
 `sw version` and `sw stats` tell you when a new release is out (`SHELLWISE_NO_UPDATE_CHECK=1`
-turns that daily check off).
+turns that daily check off; set it before the shell integration loads and run `sw daemon stop`
+once, because a daemon that is already running keeps its old environment).
 
 ```bash
 brew upgrade shellwise

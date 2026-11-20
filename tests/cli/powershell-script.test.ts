@@ -240,6 +240,8 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
       add("'git status'"),
       "$null = prompt",
       "'psrl=' + (Get-Module PSReadLine).Version",
+      // Early PSReadLine 2.0 builds (Windows 10, Server 2019/2022) have no such rule to ask.
+      "$rl = 'Microsoft.PowerShell.PSConsoleReadLine' -as [type]; 'rule=' + [bool]($rl -and $rl.GetMethod('GetDefaultAddToHistoryOption'))",
       "'rec=' + ($global:rec -join '|')",
     ].join("; ");
     const ownModules =
@@ -249,11 +251,11 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
     const p = Bun.spawnSync([shell, "-NoProfile", "-NonInteractive", "-Command", command], {
       env: { ...process.env, ...env, ...ownModules },
     });
-    const [psrl, rec] = p.stdout.toString().trim().split(/\r?\n/);
+    const [psrl, rule, rec] = p.stdout.toString().trim().split(/\r?\n/);
     if (process.env.SW_E2E_DUMP) console.log(`${shell}: ${psrl} ${rec}`);
     expect(p.stderr.toString().trim()).toBe("");
     expect(psrl).toMatch(withPsReadLine ? /^psrl=\d/ : /^psrl=$/);
-    expect(rec).toBe(expected);
+    expect(rec).toBe(withPsReadLine && rule !== "rule=True" ? "rec=$env:GITHUB_TOKEN = 'ghp_x'|git status" : expected);
   }, SHELL_TIMEOUT_MS);
 
   test.skipIf(SHELLS.length === 0)("does not record a multi-line command", () => {
