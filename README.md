@@ -9,6 +9,7 @@ backed by a tiny background daemon that answers in **~1–3 ms**, so suggestions
 with your typing instead of the other way around.
 
 [![npm version](https://img.shields.io/npm/v/shellwise?style=flat-square&color=3fb950&label=npm)](https://www.npmjs.com/package/shellwise)
+[![Tests](https://img.shields.io/github/actions/workflow/status/kurovu146/shellwise/test.yml?branch=main&style=flat-square&label=tests)](https://github.com/kurovu146/shellwise/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-3b82f6?style=flat-square)](LICENSE)
 [![Runtime](https://img.shields.io/badge/runtime-Bun-000000?style=flat-square&logo=bun&logoColor=white)](https://bun.sh)
 [![Shell](https://img.shields.io/badge/shell-zsh%20%7C%20fish%20%7C%20bash%20%7C%20powershell-89e051?style=flat-square)](#-requirements)
@@ -47,7 +48,7 @@ re-run something of your own or reach for a command shellwise ships with:
 - 🧠 **Suggestions that learn you** — your real history, ranked by **frecency** (frequency × recency), so the commands you actually use float to the top and stale ones fade.
 - ⚡ **Instant** — a persistent daemon answers every keystroke in ~1–3 ms over a Unix socket. In zsh nothing is ever forked while you type; fish costs one tiny `nc` per keystroke, still under 5 ms.
 - ⌨️ **No `Ctrl+R` required** — see matches inline as you type. (`Ctrl+R` is still there for full-screen fuzzy search when you want it.)
-- 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket (on Windows the socket is protected by your own `%TEMP%` folder's permissions, not by a file mode). Nothing leaves your computer.
+- 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket (on Windows the socket is protected by your own `%TEMP%` folder's permissions, not by a file mode). Your history never leaves your computer; the only network request is a daily version check against the npm registry, which `SHELLWISE_NO_UPDATE_CHECK=1` turns off (see Update).
 - 📦 **Zero config** — one install, shell integration auto-injected, done. (On Windows: one line in `$PROFILE`, see [below](#-windows--powershell).)
 
 ## 🆚 How it compares
@@ -336,6 +337,9 @@ the PSReadLine 2.0 that ships with Windows PowerShell 5.1 matches any `key`), no
 - fish needs `nc` or `socat` for the dropdown, since fish has no socket builtin.
   macOS ships `nc`; on Linux install `netcat-openbsd`. Without either, fish keeps
   auto-save and `Ctrl+R`, just no dropdown.
+- Known issue: with fish inside tmux on Linux (seen with fish 4.2 on Ubuntu) the
+  dropdown frame does not show; `Tab` still fills in the suggestion.
+- The test suite runs on macOS, Linux and Windows on every push.
 - [Bun](https://bun.sh) ≥ 1.0.0 (on Windows a current Bun release — CI runs the latest — and, [as Bun requires](https://bun.sh/docs/installation), Windows 10 version 1809 or later) — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries (including the Windows zip) are standalone.
 
 ## ⬆️ Update
