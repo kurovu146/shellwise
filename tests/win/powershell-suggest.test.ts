@@ -154,8 +154,15 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
         if (Date.now() > deadline) {
           const rows = pid === null ? [] : drive(pid, [{ type: "screen", label: "never recorded" }])[0].rows;
           const daemon = `${box.cli(["daemon", "status"]).trim()} (pids ${daemonPids().join(",")})`;
+          const db = new Database(join(box.env.XDG_DATA_HOME, "shellwise", "history.db"), { readonly: true });
+          const stored = JSON.stringify(db.query("SELECT command, exit_code, shell FROM commands ORDER BY id DESC LIMIT 6").all());
+          db.close();
+          const procs = Bun.spawnSync([
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'bun|cmd' } | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
+          ]).stdout.toString().trim();
           throw new Error(
-            `never recorded: ${command}\nfound: ${suggest(query).join(" | ")}\ndaemon: ${daemon}\nscreen:\n${rows.join("\n").trimEnd()}`
+            `never recorded: ${command}\nfound: ${suggest(query).join(" | ")}\ndaemon: ${daemon}\nstored: ${stored}\nprocesses:\n${procs}\nscreen:\n${rows.join("\n").trimEnd()}`
           );
         }
         Bun.sleepSync(100);
