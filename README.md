@@ -102,6 +102,11 @@ npm install -g shellwise
 Shell integration is auto-injected into your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`.
 **Open a new terminal** (or `source` your rc file) to activate. On Windows, see [below](#-windows--powershell).
 
+Recent npm versions skip a package's install script unless you allow it (npm prints
+`install scripts not yet covered by allowScripts`), and `bun install -g` blocks it by default.
+Then nothing is injected: install with `npm install -g --allow-scripts=shellwise shellwise`, or
+add the line yourself as shown below.
+
 <details>
 <summary>Manual setup (if auto-inject didn't run)</summary>
 
