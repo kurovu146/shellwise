@@ -121,7 +121,7 @@ shellwise init fish | source
 
 ## 🪟 Windows / PowerShell
 
-PowerShell is supported on Windows only; Git Bash and PowerShell on macOS / Linux are untested.
+PowerShell is tested on Windows only; Git Bash and PowerShell on macOS / Linux are untested.
 Install with `bun install -g shellwise` or `npm install -g shellwise` (both need
 [Bun](https://bun.sh) as the runtime), or download `shellwise-windows-x64.zip` from
 [GitHub Releases](https://github.com/kurovu146/shellwise/releases), unzip it and put
@@ -164,7 +164,7 @@ postinstall scripts by default, so with Bun add the line yourself.
 
 - sets `PredictionViewStyle` to `ListView`, on every load;
 - adds `Plugin` to the prediction source (`None` becomes `Plugin`, `History` becomes `HistoryAndPlugin`);
-- binds `Tab` / `Shift+Tab` to the next / previous entry of PSReadLine's list whenever a list is showing — PSReadLine's own `[History]` entries included, not only shellwise's. With no list on screen the key does what it did before, so completion keeps working there;
+- binds `Tab` / `Shift+Tab` to the next / previous entry of PSReadLine's list when a list is showing — PSReadLine's own `[History]` entries included, not only shellwise's. With no list on screen the key does what it did before, so completion keeps working there. With `TabCompleteNext` (PSReadLine's default), a `Tab` right after a completion goes on to the next completion even when a list is showing, and into the list once completing changes nothing; with `MenuComplete` the list always comes first;
 - binds `Ctrl+R` to the fuzzy search.
 
 A `Tab` or `Shift+Tab` you bound to your own script block is not rebound: the list still shows
@@ -194,7 +194,8 @@ new minor version); that one start is noticeably slower (roughly half a second).
 roughly 0.2 s to an interactive `pwsh` start and about 0.25 s to `pwsh -Command`, which would not
 load PSReadLine otherwise (measured on one machine).
 
-Not supported on Windows yet: `sw ssh`, cmd.exe, and an arm64 binary. Multi-line commands are
+Not supported on Windows yet: `sw ssh` (it prints `shellwise ssh is not supported on Windows yet.`
+and exits 1), cmd.exe, and an arm64 binary. Multi-line commands are
 neither saved live nor imported. The built-in `common` suggestions include POSIX commands
 (`chmod +x`, `grep -r`) and are offered in PowerShell too.
 
@@ -323,6 +324,9 @@ On Windows the same files live under `%USERPROFILE%\.local\share\shellwise` and
 daemon's per-user socket file is in `%TEMP%`. It is protected by the permissions of your own
 `%TEMP%` folder, not by a file mode.
 
+In PowerShell, lines PSReadLine itself would not save to its history file (it treats them as
+sensitive: passwords, tokens, keys) are not recorded.
+
 ## ✅ Requirements
 
 - macOS, Linux or Windows (x64)
@@ -330,11 +334,12 @@ daemon's per-user socket file is in `%TEMP%`. It is protected by the permissions
 - fish needs `nc` or `socat` for the dropdown, since fish has no socket builtin.
   macOS ships `nc`; on Linux install `netcat-openbsd`. Without either, fish keeps
   auto-save and `Ctrl+R`, just no dropdown.
-- [Bun](https://bun.sh) ≥ 1.0.0 (≥ 1.1 on Windows, which also means Windows 10 version 1809 or later) — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries (including the Windows zip) are standalone.
+- [Bun](https://bun.sh) ≥ 1.0.0 (on Windows a current Bun release — CI runs the latest — and, [as Bun requires](https://bun.sh/docs/installation), Windows 10 version 1809 or later) — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries (including the Windows zip) are standalone.
 
 ## ⬆️ Update
 
-`sw version` and `sw stats` tell you when a new release is out.
+`sw version` and `sw stats` tell you when a new release is out (`SHELLWISE_NO_UPDATE_CHECK=1`
+turns that daily check off).
 
 ```bash
 brew upgrade shellwise
@@ -342,8 +347,8 @@ bun install -g shellwise@latest
 npm install -g shellwise@latest
 ```
 
-On Windows with the zip: the running daemon keeps `shellwise.exe` locked, and a PowerShell that
-has shellwise loaded starts it again after every command. Stop it and swap the file in one line,
+On Windows with the zip: the running daemon keeps `shellwise.exe` locked, and a PowerShell 7.2+
+that has shellwise loaded starts it again with the next command you run. Stop it and swap the file in one line,
 from the folder that holds the new `shellwise.exe`:
 
 ```powershell
@@ -356,8 +361,8 @@ shellwise daemon stop; Copy-Item .\shellwise.exe (Get-Command shellwise).Source 
 brew uninstall shellwise      # or: bun remove -g shellwise / npm uninstall -g shellwise
 ```
 
-Shell integration is removed automatically (npm 7 and later does not run uninstall scripts, so
-there it stays). If a line remains, delete it from
+Shell integration is removed automatically (npm 7 and later and Bun do not run uninstall scripts,
+so there it stays). If a line remains, delete it from
 your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`:
 
 ```bash

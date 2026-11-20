@@ -65,7 +65,7 @@ Commands:
   add <cmd>                   Save a command to history
   delete <cmd>                Delete a command from history
   init <zsh|bash|fish|powershell>  Output shell integration script
-  ssh [ssh options] <host>    SSH with suggestions on the remote host
+  ssh [ssh options] <host>    SSH with suggestions on the remote host (macOS / Linux)
   import [zsh|bash|fish|powershell]  Import existing shell history
   stats                       Show usage statistics
   prune --days <n>            Remove entries older than n days
