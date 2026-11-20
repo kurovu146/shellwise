@@ -27,8 +27,8 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       # Install the shells so the zsh/fish suites actually run on POSIX legs.
-      # tmux is deliberately NOT installed: the tmux e2e suites are timing-based
-      # and have never run on shared runners, so they stay local-only.
+      # tmux is not installed here: the Ubuntu image has it, so the tmux suites
+      # run on Linux only (the fish frame suite is skipped there, see the test).
       - name: Install zsh and fish (Linux)
         if: runner.os == 'Linux'
         # fish 4 from the fish PPA: the distro still ships 3.x.
