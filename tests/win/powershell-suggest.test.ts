@@ -285,13 +285,13 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
       const data = join(box.env.XDG_DATA_HOME, "shellwise");
       // Soon, not at once: the stopped daemon is still exiting, and a start
       // that lost to it may still be on its way out.
-      const deadline = Date.now() + 8000;
+      const freeBy = Date.now() + 8000;
       while (true) {
         try {
           renameSync(data, `${data}-moved`);
           break;
         } catch (e) {
-          if (Date.now() > deadline) throw e;
+          if (Date.now() > freeBy) throw e;
           Bun.sleepSync(100);
         }
       }
