@@ -47,10 +47,14 @@ function compareVersions(current: string, latest: string): number {
   return 0;
 }
 
+/** SHELLWISE_NO_UPDATE_CHECK=1 turns the check off: no cache file, no network (tests set it). */
+const updateCheckOff = () => process.env.SHELLWISE_NO_UPDATE_CHECK === "1";
+
 export async function checkForUpdate(
   currentVersion: string,
   silent: boolean = false
 ): Promise<void> {
+  if (updateCheckOff()) return;
   const cache = readCache();
   const now = Date.now();
 
@@ -78,6 +82,7 @@ export async function checkForUpdate(
 }
 
 export function getUpdateNotice(currentVersion: string): string | null {
+  if (updateCheckOff()) return null;
   const cache = readCache();
   if (!cache) return null;
   if (compareVersions(currentVersion, cache.latestVersion) < 0) {

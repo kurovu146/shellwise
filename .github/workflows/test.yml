@@ -15,7 +15,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The Windows leg is mostly process starts (consoles, shells, daemons).
+    timeout-minutes: 30
+    # No update check (a request to the npm registry) from any CLI a test starts.
+    env:
+      SHELLWISE_NO_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
