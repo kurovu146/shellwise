@@ -150,21 +150,39 @@ export function handleRequest(raw: string): string {
  * Takes the pid file as the endpoint's lock: created exclusively, so of
  * daemons starting at once (two shells opening together) exactly one gets it.
  * False when a live daemon holds it. A stale one (dead pid, or a live pid that
- * never answered) is removed and the create retried once.
+ * never answered) is removed and the create retried; twice at most, since
+ * the holder that replaced it can be slow too.
  */
 async function takePidFile(pidPath: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const create = (): boolean => {
     try {
       writeFileSync(pidPath, `${process.pid}`, { flag: "wx", mode: 0o600 });
       return true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      return false;
     }
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (create()) return true;
     const owner = await endpointOwner();
     if (owner.live) return false;
     if (owner.content !== null) removePidFileIf(owner.content);
   }
-  return false;
+  // The stale holder was just removed: this one becomes the daemon, rather
+  // than leave the endpoint with none (the stale holder leaves on its own
+  // ownership check).
+  return create();
+}
+
+/**
+ * A test-only start delay from the environment, in ms: 0 when unset or not a
+ * positive number, and at most a minute, so that no value can keep a daemon
+ * holding the pid file without ever binding.
+ */
+export function parseTestDelay(raw: string | undefined): number {
+  const ms = Number(raw ?? 0);
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 60_000) : 0;
 }
 
 export async function startServer(): Promise<void> {
@@ -177,13 +195,17 @@ export async function startServer(): Promise<void> {
 
   try {
     initPreparedStatements();
-    // Test-only: lets a test make this start slower than the grace.
-    const delay = Number(process.env.SHELLWISE_TEST_BIND_DELAY_MS ?? 0);
-    if (delay > 0) await Bun.sleep(delay);
+    // Test-only: makes this start slower than the grace.
+    const bindDelay = parseTestDelay(process.env.SHELLWISE_TEST_BIND_DELAY_MS);
+    if (bindDelay > 0) await Bun.sleep(bindDelay);
     // Slower than the grace, this start may have been judged stale and
     // another one taken the pid file: then the socket path is that one's
     // (it may be serving there already). Leave it alone.
     if (!ownsPidFile()) process.exit(0);
+    // Test-only: a take-over between the check above and the bind, which
+    // only the check after the bind can see.
+    const unlinkDelay = parseTestDelay(process.env.SHELLWISE_TEST_UNLINK_DELAY_MS);
+    if (unlinkDelay > 0) await Bun.sleep(unlinkDelay);
     // A leftover socket file of a daemon that died (or of one that lost the
     // pid file to us and left): removed right before the bind, not earlier.
     if (existsSync(socketPath)) {

@@ -5,6 +5,7 @@ import { basename, join, resolve } from "path";
 import { connect, createServer } from "net";
 import { Database } from "bun:sqlite";
 import { probeDaemon } from "../../src/daemon/client";
+import { parseTestDelay } from "../../src/daemon/server";
 import { daemonPids as findDaemonPids, runsDaemon } from "./daemon-processes";
 
 // Spawns real daemons, so everything they touch lives in a private temp dir:
@@ -474,49 +475,90 @@ describe("a daemon still starting", () => {
   }, 45_000);
 });
 
+describe("test-only start delays", () => {
+  test("only a positive number is a delay, and at most a minute", () => {
+    for (const raw of [undefined, "", "abc", "NaN", "0", "-5", "Infinity", "-Infinity"]) expect(parseTestDelay(raw)).toBe(0);
+    expect(parseTestDelay("3500")).toBe(3500);
+    expect(parseTestDelay("1e12")).toBe(60_000);
+    expect(parseTestDelay("2147483648")).toBe(60_000);
+  });
+});
+
 // A daemon that takes longer than the grace between its pid file and its bind
-// (made so with a test-only delay) is judged stale and taken over by a later
-// start. The test delays both; the later one binds last.
+// is judged stale and taken over by a later start. Test-only delays make a
+// start slow: BIND before its ownership check, UNLINK between that check and
+// the socket path (where only the check after the bind sees a take-over).
 describe("a daemon slower than the grace", () => {
-  // [slow one's delay, later one's delay]: the slow one binds first, or last.
-  test.each([
-    ["binds before the later start", 3500, 1000],
-    ["wakes after the later start has bound", 5000, 0],
-  ])("%s: it leaves without touching the socket; one daemon, holding the pid file", async (_, slowDelay, lateDelay) => {
-    const env = envFor(`slow-${slowDelay}`);
-    const pidFile = join(dir, `slow-${slowDelay}.pid`);
+  type Delays = { bind?: number; unlink?: number };
+
+  async function slowStarts(name: string, slow: Delays[], late: Delays | null) {
+    const env = envFor(`slow-${name}`);
+    const pidFile = join(dir, `slow-${name}.pid`);
     const foreign = new Set(daemonPids());
     const ours = () => daemonPids().filter((p) => !foreign.has(p));
-    const run = (delayMs: number) =>
+    const run = (d: Delays) =>
       Bun.spawn([process.execPath, ENTRY, "daemon", "_run"], {
-        env: { ...env, SHELLWISE_TEST_BIND_DELAY_MS: String(delayMs) },
+        env: {
+          ...env,
+          SHELLWISE_TEST_BIND_DELAY_MS: String(d.bind ?? 0),
+          SHELLWISE_TEST_UNLINK_DELAY_MS: String(d.unlink ?? 0),
+        },
         cwd: dir,
         stdio: ["ignore", "ignore", "ignore"],
       });
+    const holder = () => {
+      const content = existsSync(pidFile) ? readFileSync(pidFile, "utf-8").trim() : "";
+      return content ? parseInt(content) : null;
+    };
     try {
-      const slow = run(slowDelay);
+      const started = slow.map(run);
       const deadline = Date.now() + 5000;
-      while (!existsSync(pidFile) && Date.now() < deadline) await Bun.sleep(20);
-      expect(parseInt(readFileSync(pidFile, "utf-8"))).toBe(slow.pid);
-      // Waits out the grace (3 s) and takes the pid file.
-      const late = run(lateDelay);
-      await Promise.race([slow.exited, Bun.sleep(10_000)]);
+      while (holder() === null && Date.now() < deadline) await Bun.sleep(20);
+      // Started together, any of them may have taken it.
+      const firstHolder = holder();
+      expect(started.map((p) => p.pid)).toContain(firstHolder);
+      // This one, and the others started with the first, wait out the grace
+      // (3 s after the pid file) and take it over.
+      const lateStart = late ? run(late) : null;
+      // Settled: one daemon of ours left and answering, or the time is up.
       let answer = "";
-      const until = Date.now() + 10_000;
-      while (!answer && Date.now() < until) {
+      const until = Date.now() + 20_000;
+      while (Date.now() < until) {
         answer = await rawRequest(env.SHELLWISE_DAEMON_SOCKET, "PING\n").catch(() => "");
-        if (!answer) await Bun.sleep(100);
+        if (answer && ours().length === 1) break;
+        await Bun.sleep(200);
       }
-      const holder = existsSync(pidFile) ? parseInt(readFileSync(pidFile, "utf-8")) : null;
-      expect({ answer, alive: ours(), pidFile: holder }).toEqual({
-        answer: "PONG\n\n",
-        alive: [late.pid],
-        pidFile: late.pid,
-      });
+      return { started, firstHolder, lateStart, result: { answer, alive: ours(), pidFile: holder() } };
     } finally {
       for (const pid of ours()) await killDaemon(pid);
     }
-  }, 30_000);
+  }
+
+  test("woken after the later start has bound: it leaves without touching the socket", async () => {
+    // Checks the pid file at 5 s; the later start took it at 3 s and bound.
+    const { lateStart, result } = await slowStarts("pre", [{ bind: 5000 }], {});
+    expect(result).toEqual({ answer: "PONG\n\n", alive: [lateStart!.pid], pidFile: lateStart!.pid });
+  }, 40_000);
+
+  test("taken over between its check and its bind: it binds, sees it, and leaves without stopping", async () => {
+    // Passes its check at once, binds at 4.5 s; the later start takes the pid
+    // file at 3 s and binds at 6 s, after removing the slow one's socket file.
+    const { lateStart, result } = await slowStarts("post", [{ unlink: 4500 }], { unlink: 3000 });
+    expect(result).toEqual({ answer: "PONG\n\n", alive: [lateStart!.pid], pidFile: lateStart!.pid });
+  }, 40_000);
+
+  test("three slow starts at once: one stays as the daemon, holding the pid file", async () => {
+    // The two later ones both wait out the first; the one that loses the
+    // race for the pid file then waits out the winner, which is slow too, and
+    // removes its file: it must take the file itself, not leave none.
+    const { started, firstHolder, result } = await slowStarts("three", [{ bind: 4000 }, { bind: 4000 }, { bind: 4000 }], null);
+    expect(result.answer).toBe("PONG\n\n");
+    expect(result.alive).toHaveLength(1);
+    expect(started.map((p) => p.pid)).toContain(result.alive[0]);
+    // The first holder is taken over at 3 s and leaves at its check.
+    expect(result.alive[0]).not.toBe(firstHolder);
+    expect(result.pidFile).toBe(result.alive[0]);
+  }, 40_000);
 });
 
 describe("unreachable socket", () => {
