@@ -115,7 +115,7 @@ class Sandbox {
     writeFileSync(history, psreadlineHistory.map((l) => `${l}\r\n`).join(""));
     const profile = join(this.dir, `profile-${name}.ps1`);
     const lines = [
-      "[Console]::SetWindowSize(120, 30)",
+      "[Console]::SetWindowSize([Math]::Min(120, [Console]::LargestWindowWidth), [Math]::Min(30, [Console]::LargestWindowHeight))",
       // Keep PSReadLine off the user's real history file.
       `Set-PSReadLineOption -HistorySavePath '${history}'`,
       ...profileLines,

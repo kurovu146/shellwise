@@ -2,6 +2,8 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { filterRequest, startProxy } from "../../src/daemon/proxy";
 import { unlinkSync, existsSync } from "fs";
 import { connect } from "net";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { Socket } from "bun";
 
 describe("filterRequest — read-only (default)", () => {
@@ -98,8 +100,8 @@ function ask(socketPath: string, message: string): Promise<string> {
 }
 
 describe("startProxy", () => {
-  const upstream = `/tmp/sw-test-upstream-${process.pid}.sock`;
-  const listen = `/tmp/sw-test-proxy-${process.pid}.sock`;
+  const upstream = join(tmpdir(), `sw-test-upstream-${process.pid}.sock`);
+  const listen = join(tmpdir(), `sw-test-proxy-${process.pid}.sock`);
 
   test("passes SUGGEST through to the daemon and returns its reply", async () => {
     const daemon = startFakeDaemon(upstream);
