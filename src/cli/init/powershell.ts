@@ -133,6 +133,16 @@ function global:__sw_record([bool]$Ok, $Code) {
     $cmd = $h.CommandLine
     # The daemon's wire protocol is line-based.
     if (-not $cmd -or $cmd -match "[\r\n]") { return }
+    # Not a line PSReadLine keeps out of its own history file, taking it for
+    # a secret (a password, token or key): its default rule, from 2.0 on. A
+    # user's AddToHistoryHandler is not asked. Without PSReadLine loaded the
+    # line is recorded as before.
+    $rl = 'Microsoft.PowerShell.PSConsoleReadLine' -as [type]
+    if ($rl -and $rl.GetMethod('GetDefaultAddToHistoryOption')) {
+        try {
+            if ("$($rl::GetDefaultAddToHistoryOption($cmd))" -ne 'MemoryAndFile') { return }
+        } catch {}
+    }
     $exit = if ($Ok) { 0 } elseif ($Code) { [int]$Code } else { 1 }
     $dur = [int]($h.EndExecutionTime - $h.StartExecutionTime).TotalMilliseconds
     $cwd = (Get-Location).ProviderPath

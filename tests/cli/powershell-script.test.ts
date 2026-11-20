@@ -220,6 +220,42 @@ describe.each(SHELLS.length > 0 ? SHELLS : ["(none)"])("the script in %s", (shel
     ]);
   }, SHELL_TIMEOUT_MS);
 
+  // PSReadLine keeps lines it takes for secrets out of its history file; so
+  // does the hook. Windows PowerShell gets its own PSReadLine (2.0), not the
+  // newer one pwsh's module path would bring in.
+  test.skipIf(SHELLS.length === 0).each([
+    ["with PSReadLine loaded: only what PSReadLine would save to its file", true, "rec=git status"],
+    ["without PSReadLine: everything, as before", false, "rec=$env:GITHUB_TOKEN = 'ghp_x'|git status"],
+  ])("records %s", (_, withPsReadLine, expected) => {
+    const f = scriptFile("secret", generatePowerShellScript(NO_BIN, { socketPath: join(dir, "x.sock"), dataDir: dir }));
+    const add = (line: string) =>
+      `Add-History -InputObject ([pscustomobject]@{ CommandLine = ${line}; ExecutionStatus = $done; StartExecutionTime = $now; EndExecutionTime = $now })`;
+    const command = [
+      ...(withPsReadLine ? ["Import-Module PSReadLine"] : []),
+      `Invoke-Expression (Get-Content -Raw '${f}')`,
+      "$global:rec = @(); function global:__sw_spawn($a, $e) { if ($a[0] -eq 'add') { $global:rec += $e.SW_ADD_COMMAND } }",
+      "$now = Get-Date; $done = [System.Management.Automation.Runspaces.PipelineState]::Completed",
+      add(`"\`$env:GITHUB_TOKEN = 'ghp_x'"`),
+      "$null = prompt",
+      add("'git status'"),
+      "$null = prompt",
+      "'psrl=' + (Get-Module PSReadLine).Version",
+      "'rec=' + ($global:rec -join '|')",
+    ].join("; ");
+    const ownModules =
+      shell === "powershell.exe"
+        ? { PSModulePath: (process.env.PSModulePath ?? "").split(";").filter((p) => /WindowsPowerShell/i.test(p)).join(";") }
+        : {};
+    const p = Bun.spawnSync([shell, "-NoProfile", "-NonInteractive", "-Command", command], {
+      env: { ...process.env, ...env, ...ownModules },
+    });
+    const [psrl, rec] = p.stdout.toString().trim().split(/\r?\n/);
+    if (process.env.SW_E2E_DUMP) console.log(`${shell}: ${psrl} ${rec}`);
+    expect(p.stderr.toString().trim()).toBe("");
+    expect(psrl).toMatch(withPsReadLine ? /^psrl=\d/ : /^psrl=$/);
+    expect(rec).toBe(expected);
+  }, SHELL_TIMEOUT_MS);
+
   test.skipIf(SHELLS.length === 0)("does not record a multi-line command", () => {
     // The daemon's protocol is one line per request. (Through a live daemon the
     // broken-up request happens to store nothing; the DB fallback would.)
