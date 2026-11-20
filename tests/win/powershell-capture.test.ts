@@ -21,6 +21,9 @@ const ENTRY = join(REPO, "src", "index.ts");
 const CLI = TEST_BIN ? [TEST_BIN] : [process.execPath, ENTRY];
 // A shell plus PSReadLine starting cold, then several commands that each spawn bun.
 const TEST_TIMEOUT_MS = 60_000;
+// Hooks start a console (through powershell.exe, or a pseudo console and a
+// CIM query) and stop a daemon: more than Bun's 5 s default on a slow runner.
+const SETUP_TIMEOUT_MS = 30_000;
 const SHELLS = ["pwsh", "powershell.exe"].filter((s) => Bun.which(s) !== null);
 // conhost as Start-Process opens it (a tall scrollback buffer), the same with
 // no scrollback, and a pseudo console (Windows Terminal, VS Code), which also
@@ -186,14 +189,14 @@ function describeShell(shell: string, terminal: Terminal): void {
       } else {
         pid = hostPid = startHiddenConsole(shell, args, env);
       }
-    });
+    }, SETUP_TIMEOUT_MS);
 
     afterAll(() => {
       if (hostPid !== null) killTree(hostPid);
       pid = hostPid = null;
       cli(["daemon", "stop"]);
       removeDir(dir);
-    });
+    }, SETUP_TIMEOUT_MS);
 
     const cli = (args: string[]) => cliIn(env, args);
     const suggest = (query: string) => cli(["suggest", "--query", query, "--limit", "20"]).split("\n");

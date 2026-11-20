@@ -3,6 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
+// By absolute path: `bun test` may start in another directory.
+const ENTRY = join(import.meta.dir, "..", "..", "src", "index.ts");
+
 /**
  * `os.homedir()` is resolved once when the process starts, so setting
  * process.env.HOME here would not move it — an earlier version of this test
@@ -76,7 +79,7 @@ describe("importFishHistory", () => {
 describe("sw import fish", () => {
   test("finds fish_history under the home directory it is given", () => {
     const p = Bun.spawnSync(
-      [process.execPath, "run", "src/index.ts", "import", "fish"],
+      [process.execPath, ENTRY, "import", "fish"],
       {
         env: {
           ...process.env,

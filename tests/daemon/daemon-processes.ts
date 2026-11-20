@@ -28,7 +28,10 @@ export function daemonPids(image: string, program: string): number[] {
       .filter((l) => runsDaemon(l.slice(l.indexOf(" ") + 1), program))
       .map((l) => parseInt(l));
   }
-  const out = Bun.spawnSync(["ps", "-axo", "pid=,args="]).stdout.toString();
+  // All processes, full command lines (-w twice: no width limit, whatever
+  // COLUMNS or a terminal says), no header. Spelled the same in procps and
+  // BSD/macOS ps, and without mixing their option styles.
+  const out = Bun.spawnSync(["ps", "-A", "-ww", "-o", "pid=,args="]).stdout.toString();
   return out
     .split("\n")
     .map((l) => l.trim())

@@ -14,6 +14,9 @@ import { join } from "path";
  * end of a line is written as two.
  */
 type Result = { imported: number; skipped: number; multiline: number };
+
+// By absolute path: `bun test` may start in another directory.
+const ENTRY = join(import.meta.dir, "..", "..", "src", "index.ts");
 let importPowerShellHistory: (path: string, existing: Set<string>, seen: Set<string>) => Result;
 let powerShellHistoryPaths: (env: {
   platform: NodeJS.Platform;
@@ -38,7 +41,7 @@ function stored(): string[] {
 }
 
 function runCli(args: string[], dir: string, appData: string): string {
-  const p = Bun.spawnSync([process.execPath, "run", "src/index.ts", ...args], {
+  const p = Bun.spawnSync([process.execPath, ENTRY, ...args], {
     env: {
       ...process.env,
       HOME: dir,
