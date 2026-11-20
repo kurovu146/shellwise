@@ -83,7 +83,7 @@ describe.skipIf(!zsh || !tmux)("a nested interactive shell", () => {
       "-s",
       SESSION,
       // Exactly what a child shell would inherit from a parent mid-command.
-      `env ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} __SW_COMMAND=claude __SW_START_TIME=1000 zsh -i`,
+      `env skip_global_compinit=1 ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} __SW_COMMAND=claude __SW_START_TIME=1000 zsh -i`,
     ]);
     Bun.sleepSync(2000);
 
@@ -122,7 +122,7 @@ describe.skipIf(!zsh || !tmux)("a nested interactive shell", () => {
       "-d",
       "-s",
       SESSION,
-      `env ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} zsh -i`,
+      `env skip_global_compinit=1 ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socket} zsh -i`,
     ]);
     Bun.sleepSync(1500);
     Bun.spawnSync(["tmux", "send-keys", "-t", SESSION, "true marker-command", "Enter"]);

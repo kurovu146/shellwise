@@ -170,7 +170,7 @@ function describeShell(shell: string, terminal: Terminal): void {
       const profile = [
         // The driver reads 30 rows; powershell.exe's own console default is 50.
         // A pseudo console already has the size it was opened with.
-        ...(terminal === "pseudo console" ? [] : [`[Console]::SetWindowSize(120, 30)`]),
+        ...(terminal === "pseudo console" ? [] : [`[Console]::SetWindowSize([Math]::Min(120, [Console]::LargestWindowWidth), [Math]::Min(30, [Console]::LargestWindowHeight))`]),
         ...(terminal === "conhost, no scrollback" ? [`[Console]::SetBufferSize(120, 30)`] : []),
         // Keep PSReadLine off the user's real history file.
         `Set-PSReadLineOption -HistorySavePath '${join(dir, "psreadline-history.txt")}'`,

@@ -115,7 +115,7 @@ class Sandbox {
     writeFileSync(history, psreadlineHistory.map((l) => `${l}\r\n`).join(""));
     const profile = join(this.dir, `profile-${name}.ps1`);
     const lines = [
-      "[Console]::SetWindowSize(120, 30)",
+      "[Console]::SetWindowSize([Math]::Min(120, [Console]::LargestWindowWidth), [Math]::Min(30, [Console]::LargestWindowHeight))",
       // Keep PSReadLine off the user's real history file.
       `Set-PSReadLineOption -HistorySavePath '${history}'`,
       ...profileLines,
@@ -151,7 +151,20 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
     function expectRecorded(query: string, command: string): void {
       const deadline = Date.now() + 10_000;
       while (!suggest(query).includes(command)) {
-        if (Date.now() > deadline) throw new Error(`never recorded: ${command}\nfound: ${suggest(query).join(" | ")}`);
+        if (Date.now() > deadline) {
+          const rows = pid === null ? [] : drive(pid, [{ type: "screen", label: "never recorded" }])[0].rows;
+          const daemon = `${box.cli(["daemon", "status"]).trim()} (pids ${daemonPids().join(",")})`;
+          const db = new Database(join(box.env.XDG_DATA_HOME, "shellwise", "history.db"), { readonly: true });
+          const stored = JSON.stringify(db.query("SELECT command, exit_code, shell FROM commands ORDER BY id DESC LIMIT 6").all());
+          db.close();
+          const procs = Bun.spawnSync([
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'bun|cmd' } | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
+          ]).stdout.toString().trim();
+          throw new Error(
+            `never recorded: ${command}\nfound: ${suggest(query).join(" | ")}\ndaemon: ${daemon}\nstored: ${stored}\nprocesses:\n${procs}\nscreen:\n${rows.join("\n").trimEnd()}`
+          );
+        }
         Bun.sleepSync(100);
       }
     }
@@ -270,7 +283,18 @@ function describeConfig(name: string, options: string[], owner: boolean): void {
       // (its cwd, the DB), and nothing else holds it.
       expect(box.cli(["daemon", "stop"])).toContain("Daemon stopped");
       const data = join(box.env.XDG_DATA_HOME, "shellwise");
-      renameSync(data, `${data}-moved`);
+      // Soon, not at once: the stopped daemon is still exiting, and a start
+      // that lost to it may still be on its way out.
+      const freeBy = Date.now() + 8000;
+      while (true) {
+        try {
+          renameSync(data, `${data}-moved`);
+          break;
+        } catch (e) {
+          if (Date.now() > freeBy) throw e;
+          Bun.sleepSync(100);
+        }
+      }
       renameSync(`${data}-moved`, data);
       expect(box.cli(["daemon", "start"])).toContain("Daemon started");
     }, TEST_TIMEOUT_MS);

@@ -64,6 +64,9 @@ describe.skipIf(!zsh)("what __sw_suggest sends", () => {
     );
 
     expect(out.stderr).toBe("");
+    // zsh did not wait for the daemon: give it a moment to log the request.
+    const deadline = Date.now() + 2000;
+    while (daemon.requests().length === 0 && Date.now() < deadline) Bun.sleepSync(10);
     expect(daemon.requests()).toEqual(["SUGGEST\tgit st\t5\tv2"]);
     expect(out.stdout).toContain("orig:git st");
     // The line it asked about is remembered, so a late reply can be matched.

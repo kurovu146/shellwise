@@ -11,7 +11,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { generateZshScript } from "../../src/cli/init";
 import { hasZsh } from "./zsh-harness";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { Subprocess } from "bun";
@@ -75,6 +75,8 @@ function deadSockets(pid: number): number {
 }
 
 function spawnDaemon(socket: string, log: string) {
+  // A killed daemon leaves its socket file behind, and Linux refuses to bind over it.
+  rmSync(socket, { force: true });
   daemonProc = Bun.spawn([
     process.execPath,
     join(import.meta.dir, "fake-daemon.ts"),
@@ -104,7 +106,7 @@ function startShell(): { log: string; script: string } {
   killSession();
   Bun.spawnSync([
     "tmux", "new-session", "-d", "-s", SESSION, "-x", "110", "-y", "20",
-    `env ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socketPath} zsh -i`,
+    `env skip_global_compinit=1 ZDOTDIR=${zdot} SHELLWISE_SOCKET=${socketPath} zsh -i`,
   ]);
   Bun.sleepSync(1500);
   return { log, script };
