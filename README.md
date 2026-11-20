@@ -47,8 +47,8 @@ re-run something of your own or reach for a command shellwise ships with:
 - 🧠 **Suggestions that learn you** — your real history, ranked by **frecency** (frequency × recency), so the commands you actually use float to the top and stale ones fade.
 - ⚡ **Instant** — a persistent daemon answers every keystroke in ~1–3 ms over a Unix socket. In zsh nothing is ever forked while you type; fish costs one tiny `nc` per keystroke, still under 5 ms.
 - ⌨️ **No `Ctrl+R` required** — see matches inline as you type. (`Ctrl+R` is still there for full-screen fuzzy search when you want it.)
-- 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket. Nothing leaves your computer.
-- 📦 **Zero config** — one install, shell integration auto-injected, done.
+- 🔒 **Private & local** — everything lives in a SQLite file on your machine, reached through a `0600` Unix socket (on Windows the socket is protected by your own `%TEMP%` folder's permissions, not by a file mode). Nothing leaves your computer.
+- 📦 **Zero config** — one install, shell integration auto-injected, done. (On Windows: one line in `$PROFILE`, see [below](#-windows--powershell).)
 
 ## 🆚 How it compares
 
@@ -78,7 +78,7 @@ no context switch — that's shellwise.
 | **Frecency ranking** | Frequency × recency, computed at query time — recent commands rank higher and decay naturally. |
 | **Common commands** | Suggests popular commands (`git`, `npm`, `docker`, …) even with empty history. |
 | **Daemon mode** | Persistent background process keeps suggest latency at ~1–3 ms, idles out after 30 min. |
-| **Safe & self-healing** | Reconnects automatically if the daemon restarts; preserves your command verbatim, even with `\t`/`\n`. |
+| **Safe & self-healing** | Reconnects automatically if the daemon restarts. |
 
 ## 📦 Install
 
@@ -121,6 +121,7 @@ shellwise init fish | source
 
 ## 🪟 Windows / PowerShell
 
+PowerShell is supported on Windows only; Git Bash and PowerShell on macOS / Linux are untested.
 Install with `bun install -g shellwise` or `npm install -g shellwise` (both need
 [Bun](https://bun.sh) as the runtime), or download `shellwise-windows-x64.zip` from
 [GitHub Releases](https://github.com/kurovu146/shellwise/releases), unzip it and put
@@ -134,13 +135,24 @@ Then add this line to your `$PROFILE` and open a new shell:
 shellwise init powershell | Out-String | Invoke-Expression
 ```
 
-Put it **after** other prompt tools (oh-my-posh, starship) and after any `Tab` /
-`Ctrl+R` bindings of your own — anything you set after this line wins. `$PROFILE`
-only loads when scripts are allowed: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+PowerShell 7 and Windows PowerShell each have their own `$PROFILE`; add the line to each one you
+use. If the file does not exist yet, create it first:
 
-`npm install -g shellwise` adds the line for you when a shell's execution policy is
-RemoteSigned, Unrestricted or Bypass (otherwise it prints the line to add). `bun install -g`
-blocks postinstall scripts by default, so with Bun add the line yourself.
+```powershell
+if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }; notepad $PROFILE
+```
+
+Put it **after** other prompt tools (oh-my-posh, starship): a tool that replaces `prompt` after
+this line removes the hook that saves your commands. Put it after your own `Tab` / `Ctrl+R`
+bindings too if shellwise should have those keys — a binding or PSReadLine option set after this
+line wins. `$PROFILE` only loads when scripts are allowed:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+`npm install -g shellwise` adds the line for you — to the `$PROFILE` of PowerShell 7 and of Windows
+PowerShell, wherever the execution policy is RemoteSigned, Unrestricted or Bypass (an existing
+profile is first copied to `<profile>.shellwise-backup`). npm hides the hook's messages, so look
+into `$PROFILE` afterwards and add the line yourself if it is not there. `bun install -g` blocks
+postinstall scripts by default, so with Bun add the line yourself.
 
 | Shell | Auto-save | Suggestions while typing | `Ctrl+R` |
 |---|:---:|---|:---:|
@@ -148,32 +160,41 @@ blocks postinstall scripts by default, so with Bun add the line yourself.
 | PowerShell 7.2+ with PSReadLine 2.2.2+ | ✅ | ✅ PSReadLine list, `Tab` / `Shift+Tab` | ✅ |
 | bash, Windows PowerShell 5.1 | ✅ | ❌ | ✅ |
 
-**What the init script changes in PSReadLine** (7.2+ only):
+**What the init script changes in PSReadLine** (the first three only in PowerShell 7.2+ with PSReadLine 2.2.2+; `Ctrl+R` in every version):
 
 - sets `PredictionViewStyle` to `ListView`, on every load;
 - adds `Plugin` to the prediction source (`None` becomes `Plugin`, `History` becomes `HistoryAndPlugin`);
-- binds `Tab` / `Shift+Tab` to the next / previous suggestion when the list has shellwise results for the current line — otherwise to whatever the key did before, so completion keeps working;
+- binds `Tab` / `Shift+Tab` to the next / previous entry of PSReadLine's list whenever a list is showing — PSReadLine's own `[History]` entries included, not only shellwise's. With no list on screen the key does what it did before, so completion keeps working there;
 - binds `Ctrl+R` to the fuzzy search.
 
 A `Tab` or `Shift+Tab` you bound to your own script block is not rebound: the list still shows
-and your key keeps its job. The handlers are named `ShellwiseNext` and `ShellwisePrevious`
-(`Get-PSReadLineKeyHandler` lists them). In a console smaller than 50 columns × 5 rows, or with
-redirected output, the list view and the keys are not set up.
+and your key keeps its job. `Get-PSReadLineKeyHandler` shows the bindings as `ShellwiseNext`,
+`ShellwisePrevious` and `ShellwiseSearch`. These are labels, not PSReadLine functions
+(`-Function ShellwiseNext` is rejected); to walk the list with other keys, bind PSReadLine's own
+`NextSuggestion` / `PreviousSuggestion`. While a list is showing, `Ctrl+Space` (PSReadLine's
+`MenuComplete`) is the key for completion. In a console smaller than 50 columns × 5 rows, or with
+redirected output, the list view and `Tab` / `Shift+Tab` are left as they were (`Ctrl+R` is still
+bound).
 
-To undo it, remove the line from `$PROFILE` and open a new shell. To keep shellwise but restore
-one setting, set it after the init line:
+To undo it, remove the line from `$PROFILE` and open a new shell. The background daemon keeps
+running until it idles out after 30 minutes, or until `shellwise daemon stop` from a shell
+without the line. To keep shellwise but restore PSReadLine's defaults, set them after the init line:
 
 ```powershell
+# PowerShell 7.2+ — PSReadLine's defaults on Windows
 Set-PSReadLineOption -PredictionViewStyle InlineView
-Set-PSReadLineKeyHandler -Chord Tab -Function MenuComplete
+Set-PSReadLineKeyHandler -Chord Tab -Function TabCompleteNext
+Set-PSReadLineKeyHandler -Chord Shift+Tab -Function TabCompletePrevious
+Set-PSReadLineKeyHandler -Chord Ctrl+r -Function ReverseSearchHistory
 ```
 
-The suggestion helper is a small C# plugin, compiled once per shellwise/pwsh version and cached
-in the data directory, so the first shell after an install or upgrade starts noticeably slower
-(roughly half a second). The line adds roughly 170–220 ms to every `pwsh` start, including
-`pwsh -Command` (measured on one machine).
+The suggestion helper is a small C# plugin, compiled the first time it is needed and cached in the
+data directory (compiled again only when a shellwise update changes it or PowerShell moves to a
+new minor version); that one start is noticeably slower (roughly half a second). The line adds
+roughly 0.2 s to an interactive `pwsh` start and about 0.25 s to `pwsh -Command`, which would not
+load PSReadLine otherwise (measured on one machine).
 
-Not supported on Windows: `sw ssh`, cmd.exe, and an arm64 binary. Multi-line commands are
+Not supported on Windows yet: `sw ssh`, cmd.exe, and an arm64 binary. Multi-line commands are
 neither saved live nor imported. The built-in `common` suggestions include POSIX commands
 (`chmod +x`, `grep -r`) and are offered in PowerShell too.
 
@@ -191,6 +212,10 @@ Just start typing. After 2+ characters, suggestions from your history appear inl
 | `→` Right arrow | Accept the highlighted suggestion and close the list (doesn't run it) |
 | `Esc` | Close the list, keep the command on the line |
 
+In PowerShell the list is PSReadLine's own: `Tab`, `Shift+Tab` and `Enter` work as above, but
+`Esc` goes back to what you typed (a second `Esc` clears the line) and `→` accepts nothing — the
+selected command is already on the line.
+
 ### Interactive search *(`Ctrl+R`)*
 
 | Key | Action |
@@ -200,7 +225,7 @@ Just start typing. After 2+ characters, suggestions from your history appear inl
 | `Enter` | Paste the selected command to your prompt |
 | `Esc` | Cancel |
 
-### Over SSH — with nothing installed on the remote host
+### Over SSH — with nothing installed on the remote host *(from macOS / Linux)*
 
 ```bash
 sw ssh vps.example.com          # instead of: ssh vps.example.com
@@ -233,7 +258,7 @@ shell instead of a broken one.
 
 ## 🔧 Commands
 
-Both `shellwise` and the short alias `sw` work:
+Both `shellwise` and the short alias `sw` work (the Windows zip has no `sw`, see [Windows](#-windows--powershell)):
 
 ```bash
 sw ssh [ssh options] <host>    # SSH with suggestions on the remote host
@@ -266,7 +291,7 @@ sw prune --days 90 # drop everything older than 90 days
 
 ```text
 ┌────────────────────┐   Unix socket · ~1–3 ms   ┌───────────────────┐
-│ Zsh · Bash · Fish  │ ◄═══════════════════════► │ shellwise daemon  │
+│ zsh·fish·bash·pwsh │ ◄═══════════════════════► │ shellwise daemon  │
 └────────────────────┘                           └─────────┬─────────┘
                                                            │
                                                  ┌─────────▼─────────┐
@@ -293,9 +318,10 @@ Everything is local to your machine:
 /tmp/shellwise-ssh-<uid>-<rand>.sock   # per-session `sw ssh` proxy (mode 0600)
 ```
 
-On Windows the same files live under `%USERPROFILE%.localshareshellwise` and
-`%USERPROFILE%.configshellwise` (`XDG_DATA_HOME` / `XDG_CONFIG_HOME` are honoured), and the
-daemon's per-user socket file is in `%TEMP%`.
+On Windows the same files live under `%USERPROFILE%\.local\share\shellwise` and
+`%USERPROFILE%\.config\shellwise` (`XDG_DATA_HOME` / `XDG_CONFIG_HOME` are honoured), and the
+daemon's per-user socket file is in `%TEMP%`. It is protected by the permissions of your own
+`%TEMP%` folder, not by a file mode.
 
 ## ✅ Requirements
 
@@ -304,7 +330,7 @@ daemon's per-user socket file is in `%TEMP%`.
 - fish needs `nc` or `socat` for the dropdown, since fish has no socket builtin.
   macOS ships `nc`; on Linux install `netcat-openbsd`. Without either, fish keeps
   auto-save and `Ctrl+R`, just no dropdown.
-- [Bun](https://bun.sh) ≥ 1.0.0 — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries (including the Windows zip) are standalone.
+- [Bun](https://bun.sh) ≥ 1.0.0 (≥ 1.1 on Windows, which also means Windows 10 version 1809 or later) — **only when installing via `bun`/`npm`**. The Homebrew and GitHub-release binaries (including the Windows zip) are standalone.
 
 ## ⬆️ Update
 
@@ -316,7 +342,13 @@ bun install -g shellwise@latest
 npm install -g shellwise@latest
 ```
 
-On Windows with the zip, replace `shellwise.exe` with the one from the new release.
+On Windows with the zip: the running daemon keeps `shellwise.exe` locked, and a PowerShell that
+has shellwise loaded starts it again after every command. Stop it and swap the file in one line,
+from the folder that holds the new `shellwise.exe`:
+
+```powershell
+shellwise daemon stop; Copy-Item .\shellwise.exe (Get-Command shellwise).Source -Force
+```
 
 ## 🧹 Uninstall
 
@@ -324,7 +356,8 @@ On Windows with the zip, replace `shellwise.exe` with the one from the new relea
 brew uninstall shellwise      # or: bun remove -g shellwise / npm uninstall -g shellwise
 ```
 
-Shell integration is removed automatically. If a stray line remains, delete it from
+Shell integration is removed automatically (npm 7 and later does not run uninstall scripts, so
+there it stays). If a line remains, delete it from
 your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`:
 
 ```bash
@@ -339,8 +372,18 @@ Remove all stored data:
 rm -rf ~/.local/share/shellwise
 ```
 
-On Windows, npm 11 does not run the uninstall hook: remove the `shellwise init powershell`
-line from your `$PROFILE` yourself, and delete `%USERPROFILE%.localshareshellwise` for the data.
+On Windows nothing removes the integration for you: npm (7 and later) does not run uninstall
+scripts, and Bun does not run the hook either. Delete the `# shellwise shell integration` line and
+the `shellwise init powershell` line from `$PROFILE` — PowerShell 7 and Windows PowerShell each
+have their own — then close every PowerShell window, open a new one and run:
+
+```powershell
+shellwise daemon stop           # it keeps history.db and shellwise.exe open
+npm uninstall -g shellwise      # or: bun remove -g shellwise / delete shellwise.exe
+Remove-Item -Recurse -Force "$env:USERPROFILE\.local\share\shellwise"   # all stored data
+```
+
+If npm added the line, it left a copy of your old profile next to it as `<profile>.shellwise-backup`.
 
 ## 📄 License
 
