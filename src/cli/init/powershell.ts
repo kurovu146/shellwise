@@ -273,15 +273,17 @@ function global:__sw_tab([bool]$Forward, $Key, $Arg) {
         [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$now, [ref]$at)
         $now -cne $line
     }
+    $fn = if ($Forward) { $global:__sw.TabFallback } else { $global:__sw.ShiftTabFallback }
     # Still the line the old function produced (a completion), with no command
     # run since: carry on with it, so Tab cycles through the completions even
-    # when the completed line has a list of its own.
-    $continuing = $null -ne $global:__sw.FallbackLine -and $line -ceq $global:__sw.FallbackLine -and $global:__sw.FallbackAt -eq $global:__sw.LastId
+    # when the completed line has a list of its own. Only the cycling
+    # functions continue; any other (MenuComplete, Complete) would only close
+    # the list again, so there the list comes first as on any line.
+    $continuing = $fn -in @('TabCompleteNext', 'TabCompletePrevious') -and $null -ne $global:__sw.FallbackLine -and $line -ceq $global:__sw.FallbackLine -and $global:__sw.FallbackAt -eq $global:__sw.LastId
     if (-not $continuing -and (& $moveInList)) {
         $global:__sw.FallbackLine = $null
         return
     }
-    $fn = if ($Forward) { $global:__sw.TabFallback } else { $global:__sw.ShiftTabFallback }
     [Microsoft.PowerShell.PSConsoleReadLine]::($fn).Invoke($Key, $Arg)
     $after = $null
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$after, [ref]$cursor)

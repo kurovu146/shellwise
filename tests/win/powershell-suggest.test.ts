@@ -401,8 +401,13 @@ describe.skipIf(process.platform !== "win32" || !HAS_PWSH)("PowerShell: what Tab
     waitForScreen(ours, "Tab after a command", (rows) => promptText(rows) === "PS> gc .\\zzalpha.txt -Raw");
   }, TEST_TIMEOUT_MS);
 
-  test("MenuComplete: the menu works as before, and Tab on the accepted line completes again", () => {
-    /** Prompt lines: menu opened, moved, accepted, then Tab and a marker key. */
+  test("MenuComplete: the menu works as before (open, move, accept, Escape), and Tab on an empty line", () => {
+    /**
+     * Prompt lines: menu opened, moved, accepted, then Tab and a marker key;
+     * a menu opened and left with Escape, then a marker; Tab twice on an
+     * empty line, then a marker. A key that changes nothing shows nothing:
+     * the markers show the keys before them ran.
+     */
     const run = (lines: string[], label: string) => {
       const pid = start(["Set-PSReadLineKeyHandler -Chord Tab -Function MenuComplete", ...lines]);
       ready(pid, label);
@@ -415,15 +420,28 @@ describe.skipIf(process.platform !== "win32" || !HAS_PWSH)("PowerShell: what Tab
       drive(pid, [enter]);
       // The menu rows (the other candidates) go away.
       const accepted = waitForScreen(pid, "accepted", (rows) => !rows.some((r) => r.includes("zzgamma") && !r.startsWith("PS>")));
-      // A Tab that changes nothing shows nothing: the marker shows it ran.
       drive(pid, [{ type: "key", value: "tab" }, { type: "text", value: "X" }]);
       const after = waitForScreen(pid, "Tab, X", (rows) => promptText(rows).endsWith("X"));
+
+      drive(pid, [escape, escape, { type: "text", value: "gc zz" }]);
+      waitForScreen(pid, "typed again", (rows) => promptText(rows) === "PS> gc zz");
+      drive(pid, [{ type: "key", value: "tab" }]);
+      waitForScreen(pid, "menu again", (rows) => promptText(rows) !== "PS> gc zz");
+      drive(pid, [escape, { type: "text", value: "Y" }]);
+      const escaped = waitForScreen(pid, "Escape, Y", (rows) => promptText(rows).endsWith("Y"));
+
+      drive(pid, [escape, escape]);
+      waitForScreen(pid, "empty line", (rows) => promptText(rows) === "PS>");
+      drive(pid, [{ type: "key", value: "tab" }, { type: "key", value: "tab" }, { type: "text", value: "Z" }]);
+      const empty = waitForScreen(pid, "Tab, Tab, Z", (rows) => promptText(rows).endsWith("Z"));
       dump(`${label}: menu`, opened);
       dump(`${label}: Tab, X`, after);
-      return [opened, moved, accepted, after].map(promptText);
+      dump(`${label}: menu, Escape, Y`, escaped);
+      dump(`${label}: empty line, Tab, Tab, Z`, empty);
+      return [opened, moved, accepted, after, escaped, empty].map(promptText);
     };
     const expected = run([`"ready plain"`], "MenuComplete without shellwise");
-    expect(expected).toEqual(["PS> gc .\\zzalpha.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txtX"]);
+    expect(expected.slice(0, 4)).toEqual(["PS> gc .\\zzalpha.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txt", "PS> gc .\\zzbeta.txtX"]);
     expect(run([INIT, `"ready ours"`], "MenuComplete with shellwise")).toEqual(expected);
   }, TEST_TIMEOUT_MS);
 
@@ -455,13 +473,13 @@ describe.skipIf(process.platform !== "win32" || !HAS_PWSH)("PowerShell: what Tab
       expect(listItems(completed).map((i) => i.text)).toContain(raw);
       drive(pid, [{ type: "key", value: "tab" }]);
     } else {
-      // MenuComplete: PSReadLine shows no list right after its completion,
-      // and Tab changes nothing there, as without shellwise (the marker
-      // shows the Tab ran). Typing brings the list, and Tab goes into it.
-      drive(pid, [{ type: "key", value: "tab" }, { type: "text", value: "X" }]);
-      waitForScreen(pid, "Tab, X", (rows) => promptText(rows) === `${completedLine}X`);
-      drive(pid, [{ type: "key", value: "backspace" }, { type: "text", value: " " }]);
-      waitForScreen(pid, "list after typing", (rows) => listItems(rows).some((i) => i.text === raw));
+      // MenuComplete: PSReadLine shows no list right after its completion.
+      // Typing and deleting a character brings the list back on the very
+      // line the completion produced, and Tab goes into it (calling
+      // MenuComplete again there would only close the list).
+      drive(pid, [{ type: "text", value: "X" }, { type: "key", value: "backspace" }]);
+      const back = waitForScreen(pid, "X, Backspace", (rows) => promptText(rows) === completedLine && listItems(rows).some((i) => i.text === raw));
+      dump(`${label}: X, Backspace`, back);
       drive(pid, [{ type: "key", value: "tab" }]);
     }
     const listed = waitForScreen(pid, "into the list", (rows) => promptText(rows) === `PS> ${raw}`);
